@@ -52,6 +52,7 @@
 #define __QAPI_VERSION_MAJOR_MASK (0xff000000)
 #define __QAPI_VERSION_MINOR_MASK (0x00ff0000)
 #define __QAPI_VERSION_NIT_MASK (0x0000ffff)
+#define SCOM_GLINK_INTENT_SIZE 308
 
 /*pil_slate_intf.h*/
 #define RESULT_SUCCESS 0
@@ -67,6 +68,7 @@ static void ssr_register(void);
 static int setup_pmic_gpio15(void);
 static unsigned int pmic_gpio15 = -1;
 static int slate_boot_status;
+struct rproc *slatecom_rproc;
 
 /* tzapp command list.*/
 enum slate_tz_commands {
@@ -120,7 +122,7 @@ struct slatedaemon_priv {
 	bool slate_resp_cmplt;
 	void *lhndl;
 	wait_queue_head_t link_state_wait;
-	char rx_buf[308];
+	char rx_buf[SCOM_GLINK_INTENT_SIZE];
 	struct work_struct slatecom_up_work;
 	struct work_struct slatecom_down_work;
 	struct mutex glink_mutex;
@@ -225,6 +227,10 @@ void slatecom_rx_msg(void *data, int len)
 	struct slatedaemon_priv *dev =
 		container_of(slatecom_intf_drv, struct slatedaemon_priv, lhndl);
 
+	if (len > SCOM_GLINK_INTENT_SIZE) {
+		pr_err("Invalid slatecom_intf glink intent size\n");
+		return;
+	}
 	dev->slate_resp_cmplt = true;
 	wake_up(&dev->link_state_wait);
 	memcpy(dev->rx_buf, data, len);
@@ -439,6 +445,7 @@ static int slatecom_get_rproc_handle(struct slatedaemon_priv *priv)
 		if (of_property_read_u32(pdev->dev.of_node, "qcom,rproc-handle",
 					 &rproc_phandle)) {
 			pr_err("error reading rproc phandle\n");
+			goto fail;
 		}
 
 		priv->pil_h = rproc_get_by_phandle(rproc_phandle);
@@ -446,8 +453,9 @@ static int slatecom_get_rproc_handle(struct slatedaemon_priv *priv)
 			pr_err("rproc not found\n");
 			goto fail;
 		}
+		slatecom_rproc = (struct rproc *)priv->pil_h;
+		return 0;
 	}
-	return 0;
 
 fail:
 	pr_err("%s: SLATE get handle failed\n", __func__);
@@ -845,9 +853,9 @@ static int send_boot_cmd_to_slate(struct slate_ui_data *ui_obj_msg)
 		if (!dev->pil_h)
 			ret = slatecom_get_rproc_handle(dev);
 		if (ret == 0)
-			rproc_report_crash(dev->pil_h, RPROC_WATCHDOG);
+			slatecom_rproc->ops->coredump(slatecom_rproc);
 		else
-			pr_err("failed to get rproc_handle, skip RPROC_WATCHDOG\n");
+			pr_err("failed to get rproc, skip coredump collection\n");
 		break;
 	case BOOT_STATUS:
 		ret = send_slate_boot_status(ui_obj_msg->write);
@@ -865,8 +873,10 @@ static long slate_com_ioctl(struct file *filp,
 	int ret = 0;
 	struct slate_ui_data ui_obj_msg;
 
-	if (filp == NULL)
+	if (!dev || (dev->slatecom_current_state == SLATECOM_STATE_UNKNOWN) || (filp == NULL)) {
+		pr_err("slatecom driver not initialized\n");
 		return -EINVAL;
+	}
 
 	if (arg != 0) {
 		if (copy_from_user(&ui_obj_msg, (void __user *) arg,
