@@ -59,7 +59,7 @@
 #define CFG_GDSCR_OFFSET	(REG_OFFSET + 0x4)
 
 /* Timeout Delay */
-#define TIMEOUT_US		500
+#define TIMEOUT_US		1500
 
 #define MBOX_TOUT_MS		500
 
@@ -187,13 +187,13 @@ static int gdsc_init_is_enabled(struct gdsc *sc)
 		return 0;
 	}
 
+	regmap = sc->regmap;
+	mask = SW_COLLAPSE_MASK;
+
 	if (sc->collapse_count) {
 		for (i = 0; i < sc->collapse_count; i++)
 			regmap = sc->collapse_vote.regmap[i];
 		mask = BIT(sc->collapse_vote.vote_bit);
-	} else {
-		regmap = sc->regmap;
-		mask = SW_COLLAPSE_MASK;
 	}
 
 	ret = regmap_read(regmap, REG_OFFSET, &regval);
@@ -201,6 +201,10 @@ static int gdsc_init_is_enabled(struct gdsc *sc)
 		return ret;
 
 	sc->is_gdsc_enabled = !(regval & mask);
+
+	if (sc->is_gdsc_enabled && sc->retain_ff_enable)
+		regmap_update_bits(sc->regmap, REG_OFFSET,
+			RETAIN_FF_ENABLE_MASK, RETAIN_FF_ENABLE_MASK);
 
 	return 0;
 }
@@ -1089,9 +1093,6 @@ static int gdsc_probe(struct platform_device *pdev)
 		regval |= clk_dis_wait_val;
 		sc->pm_ops = true;
 	}
-
-	if (sc->retain_ff_enable && !(regval & RETAIN_FF_ENABLE_MASK))
-		regval |= RETAIN_FF_ENABLE_MASK;
 
 	regmap_write(sc->regmap, REG_OFFSET, regval);
 

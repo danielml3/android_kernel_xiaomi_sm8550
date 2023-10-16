@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013, Sony Mobile Communications AB.
+ * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -885,13 +886,44 @@ static void msm_gpio_update_dual_edge_pos(struct msm_pinctrl *pctrl,
 		val, val2);
 }
 
+static bool is_gpio_tlmm_dc(struct irq_data *d, u32 *offset,
+				irq_hw_number_t *irq)
+{
+	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
+	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	struct msm_dir_conn *dc;
+	int i;
+
+	for (i = pctrl->n_dir_conns; i > 0; i--) {
+		dc = &pctrl->soc->dir_conn[i];
+		*offset = pctrl->n_dir_conns - i;
+		*irq = dc->irq;
+
+		if (dc->gpio == d->hwirq)
+			return true;
+	}
+
+	return false;
+}
+
 static void msm_gpio_irq_mask(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
 	const struct msm_pingroup *g;
 	unsigned long flags;
+	struct irq_data *dir_conn_data;
+	irq_hw_number_t dir_conn_irq = 0;
+	u32 offset = 0;
 	u32 val;
+
+	if (is_gpio_tlmm_dc(d, &offset, &dir_conn_irq)) {
+		dir_conn_data = irq_get_irq_data(dir_conn_irq);
+		if (!dir_conn_data)
+			return;
+
+		dir_conn_data->chip->irq_mask(dir_conn_data);
+	}
 
 	if (d->parent_data)
 		irq_chip_mask_parent(d);
@@ -941,7 +973,18 @@ static void msm_gpio_irq_unmask(struct irq_data *d)
 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
 	const struct msm_pingroup *g;
 	unsigned long flags;
+	struct irq_data *dir_conn_data;
+	irq_hw_number_t dir_conn_irq = 0;
+	u32 offset = 0;
 	u32 val;
+
+	if (is_gpio_tlmm_dc(d, &offset, &dir_conn_irq)) {
+		dir_conn_data = irq_get_irq_data(dir_conn_irq);
+		if (!dir_conn_data)
+			return;
+
+		dir_conn_data->chip->irq_unmask(dir_conn_data);
+	}
 
 	if (d->parent_data)
 		irq_chip_unmask_parent(d);
@@ -976,26 +1019,6 @@ static void msm_gpio_dirconn_handler(struct irq_desc *desc)
 	chained_irq_exit(chip, desc);
 	irq_set_irqchip_state(irq_desc_get_irq_data(desc)->irq,
 				  IRQCHIP_STATE_ACTIVE, 0);
-}
-
-static bool is_gpio_tlmm_dc(struct irq_data *d, u32 *offset,
-				irq_hw_number_t *irq)
-{
-	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
-	struct msm_dir_conn *dc;
-	int i;
-
-	for (i = pctrl->n_dir_conns; i > 0; i--) {
-		dc = &pctrl->soc->dir_conn[i];
-		*offset = pctrl->n_dir_conns - i;
-		*irq = dc->irq;
-
-		if (dc->gpio == d->hwirq)
-			return true;
-	}
-
-	return false;
 }
 
 static void configure_tlmm_dc_polarity(struct irq_data *d,
@@ -1038,6 +1061,17 @@ static void msm_gpio_irq_enable(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	struct irq_data *dir_conn_data;
+	irq_hw_number_t dir_conn_irq = 0;
+	u32 offset = 0;
+
+	if (is_gpio_tlmm_dc(d, &offset, &dir_conn_irq)) {
+		dir_conn_data = irq_get_irq_data(dir_conn_irq);
+		if (!dir_conn_data)
+			return;
+
+		dir_conn_data->chip->irq_unmask(dir_conn_data);
+	}
 
 	if (d->parent_data)
 		irq_chip_enable_parent(d);
@@ -1050,6 +1084,17 @@ static void msm_gpio_irq_disable(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	struct irq_data *dir_conn_data;
+	irq_hw_number_t dir_conn_irq = 0;
+	u32 offset = 0;
+
+	if (is_gpio_tlmm_dc(d, &offset, &dir_conn_irq)) {
+		dir_conn_data = irq_get_irq_data(dir_conn_irq);
+		if (!dir_conn_data)
+			return;
+
+		dir_conn_data->chip->irq_mask(dir_conn_data);
+	}
 
 	if (d->parent_data)
 		irq_chip_disable_parent(d);
@@ -1169,6 +1214,7 @@ static int msm_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
 	const struct msm_pingroup *g;
 	irq_hw_number_t irq = 0;
+	u32 intr_target_mask = GENMASK(2, 0);
 	unsigned long flags;
 	u32 offset = 0;
 	bool was_enabled;
@@ -1216,15 +1262,15 @@ static int msm_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 	 * With intr_target_use_scm interrupts are routed to
 	 * application cpu using scm calls.
 	 */
+	if (g->intr_target_width)
+		intr_target_mask = GENMASK(g->intr_target_width - 1, 0);
+
 	if (pctrl->intr_target_use_scm) {
 		u32 addr = pctrl->phys_base[0] + g->intr_target_reg;
 		int ret;
-
 		qcom_scm_io_readl(addr, &val);
-
-		val &= ~(7 << g->intr_target_bit);
+		val &= ~(intr_target_mask << g->intr_target_bit);
 		val |= g->intr_target_kpss_val << g->intr_target_bit;
-
 		ret = qcom_scm_io_writel(addr, val);
 		if (ret)
 			dev_err(pctrl->dev,
@@ -1232,7 +1278,7 @@ static int msm_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 				d->hwirq);
 	} else {
 		val = msm_readl_intr_target(pctrl, g);
-		val &= ~(7 << g->intr_target_bit);
+		val &= ~(intr_target_mask << g->intr_target_bit);
 		val |= g->intr_target_kpss_val << g->intr_target_bit;
 		msm_writel_intr_target(val, pctrl, g);
 	}
@@ -1314,6 +1360,43 @@ static int msm_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 	return 0;
 }
 
+static int msm_gpio_irq_set_irqchip_state(struct irq_data *d, enum irqchip_irq_state which,
+					  bool val)
+{
+	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
+	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	const struct msm_pingroup *g = &pctrl->soc->groups[d->hwirq];
+
+	if (which != IRQCHIP_STATE_PENDING)
+		return -EINVAL;
+
+	if (test_bit(d->hwirq, pctrl->skip_wake_irqs))
+		return -EINVAL;
+
+	msm_writel_intr_status(val, pctrl, g);
+
+	return 0;
+}
+
+static int msm_gpio_irq_get_irqchip_state(struct irq_data *d, enum irqchip_irq_state which,
+					  bool *val)
+{
+	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
+	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	const struct msm_pingroup *g = &pctrl->soc->groups[d->hwirq];
+
+	if (which != IRQCHIP_STATE_PENDING)
+		return -EINVAL;
+
+	if (test_bit(d->hwirq, pctrl->skip_wake_irqs))
+		return -EINVAL;
+
+	g = &pctrl->soc->groups[d->hwirq];
+	*val = msm_readl_intr_status(pctrl, g);
+
+	return 0;
+}
+
 static int msm_gpio_irq_set_wake(struct irq_data *d, unsigned int on)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
@@ -1379,6 +1462,21 @@ static int msm_gpio_irq_set_affinity(struct irq_data *d,
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+
+	unsigned int i, n_dir_conns = pctrl->n_dir_conns;
+	struct irq_data *gpio_irq_data;
+	struct msm_dir_conn *dc = NULL;
+
+	for (i = n_dir_conns; i > 0; i--) {
+		dc = &pctrl->soc->dir_conn[i];
+		gpio_irq_data = irq_get_irq_data(dc->irq);
+
+		if (!gpio_irq_data || !(gpio_irq_data->chip))
+			continue;
+
+		if (d->hwirq == dc->gpio)
+			return gpio_irq_data->chip->irq_set_affinity(gpio_irq_data, dest, force);
+	}
 
 	if (d->parent_data && test_bit(d->hwirq, pctrl->skip_wake_irqs))
 		return irq_chip_set_affinity_parent(d, dest, force);
@@ -1502,6 +1600,8 @@ static int msm_gpio_init(struct msm_pinctrl *pctrl)
 	pctrl->irq_chip.irq_request_resources = msm_gpio_irq_reqres;
 	pctrl->irq_chip.irq_release_resources = msm_gpio_irq_relres;
 	pctrl->irq_chip.irq_set_affinity = msm_gpio_irq_set_affinity;
+	pctrl->irq_chip.irq_set_irqchip_state = msm_gpio_irq_set_irqchip_state;
+	pctrl->irq_chip.irq_get_irqchip_state = msm_gpio_irq_get_irqchip_state;
 	pctrl->irq_chip.irq_set_vcpu_affinity = msm_gpio_irq_set_vcpu_affinity;
 	pctrl->irq_chip.flags = IRQCHIP_MASK_ON_SUSPEND |
 				IRQCHIP_SET_TYPE_MASKED |

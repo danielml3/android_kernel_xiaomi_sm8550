@@ -120,6 +120,7 @@ struct slatedaemon_priv {
 	struct device *platform_dev;
 	bool slatecom_rpmsg;
 	bool slate_resp_cmplt;
+	bool slate_unload;
 	void *lhndl;
 	wait_queue_head_t link_state_wait;
 	char rx_buf[SCOM_GLINK_INTENT_SIZE];
@@ -355,12 +356,12 @@ static int slatechar_read_cmd(struct slate_ui_data *fui_obj_msg,
 	if (read_buf == NULL)
 		return -ENOMEM;
 	switch (type) {
-	case REG_READ:
+	case SLATECOM_REG_READ:
 		ret = slatecom_reg_read(handle, fui_obj_msg->cmd,
 				fui_obj_msg->num_of_words,
 				read_buf);
 		break;
-	case AHB_READ:
+	case SLATECOM_AHB_READ:
 		ret = slatecom_ahb_read(handle,
 				fui_obj_msg->slate_address,
 				fui_obj_msg->num_of_words,
@@ -397,12 +398,12 @@ static int slatechar_write_cmd(struct slate_ui_data *fui_obj_msg, unsigned int t
 		return ret;
 	}
 	switch (type) {
-	case REG_WRITE:
+	case SLATECOM_REG_WRITE:
 		ret = slatecom_reg_write(handle, fui_obj_msg->cmd,
 				fui_obj_msg->num_of_words,
 				write_buf);
 		break;
-	case AHB_WRITE:
+	case SLATECOM_AHB_WRITE:
 		ret = slatecom_ahb_write(handle,
 				fui_obj_msg->slate_address,
 				fui_obj_msg->num_of_words,
@@ -464,9 +465,12 @@ fail:
 
 static int slatecom_fw_load(struct slatedaemon_priv *priv)
 {
-	int ret;
+	int ret = 0;
 
-	ret = slatecom_get_rproc_handle(priv);
+	if (!priv->pil_h) {
+		pr_err("%s: Getting rproc handle\n", __func__);
+		ret = slatecom_get_rproc_handle(priv);
+	}
 	if (ret == 0) {
 		ret = rproc_boot(priv->pil_h);
 		if (ret) {
@@ -477,10 +481,9 @@ static int slatecom_fw_load(struct slatedaemon_priv *priv)
 			goto fail;
 		}
 		slate_boot_status = 1;
+		pr_info("%s: SLATE image is loaded\n", __func__);
+		return 0;
 	}
-	pr_info("%s: SLATE image is loaded\n", __func__);
-	return 0;
-
 fail:
 	pr_err("%s: SLATE image loading failed\n", __func__);
 	return -EFAULT;
@@ -494,7 +497,9 @@ static void slatecom_fw_unload(struct slatedaemon_priv *priv)
 	}
 	if (priv->pil_h) {
 		pr_err("%s: calling subsystem put\n", __func__);
+		priv->slate_unload = true;
 		rproc_shutdown(priv->pil_h);
+		priv->slate_unload = false;
 		priv->pil_h = NULL;
 		slate_boot_status = 0;
 	}
@@ -773,6 +778,15 @@ int get_slate_boot_mode(void)
 }
 EXPORT_SYMBOL(get_slate_boot_mode);
 
+bool is_slate_unload_only(void)
+{
+	struct slatedaemon_priv *dev =
+		container_of(slatecom_intf_drv, struct slatedaemon_priv, lhndl);
+
+	return dev->slate_unload;
+}
+EXPORT_SYMBOL(is_slate_unload_only);
+
 static int send_get_fw_version(struct slate_ui_data *ui_obj_msg)
 {
 	int ret = 0;
@@ -1008,7 +1022,7 @@ static void slatecom_slateup_work(struct work_struct *work)
 	if (!dev->slatecom_rpmsg)
 		pr_err("slatecom-rpmsg is not probed yet\n");
 	ret = wait_event_timeout(dev->link_state_wait,
-				dev->slatecom_rpmsg, msecs_to_jiffies(TIMEOUT_MS));
+				dev->slatecom_rpmsg, msecs_to_jiffies(TIMEOUT_MS_GLINK_OPEN));
 	if (ret == 0) {
 		pr_err("channel connection time out %d\n", ret);
 		goto glink_err;
@@ -1171,14 +1185,17 @@ static int ssr_modem_cb(struct notifier_block *this,
 	int ret = 0;
 
 	switch (opcode) {
-//	case SUBSYS_AFTER_DS_ENTRY:
-//		msg_header.opcode = GMI_MGR_SSR_MPSS_DOWN_NOTIFICATION;
-//		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-//		if (ret < 0)
-//			pr_err("failed to send mdsp down event to slate\n");
-//		break;
 	case QCOM_SSR_BEFORE_SHUTDOWN:
 		modeme.e_type = MODEM_BEFORE_POWER_DOWN;
+		reinit_completion(&slate_modem_down_wait);
+		send_uevent(&modeme);
+		msg_header.opcode = GMI_MGR_SSR_MPSS_DOWN_PRE_NOTIFICATION;
+		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
+		if (ret < 0)
+			pr_err("failed to send mdsp down pre-event to slate\n");
+		break;
+	case QCOM_SSR_AFTER_SHUTDOWN:
+		modeme.e_type = MODEM_AFTER_POWER_DOWN;
 		reinit_completion(&slate_modem_down_wait);
 		send_uevent(&modeme);
 		msg_header.opcode = GMI_MGR_SSR_MPSS_DOWN_NOTIFICATION;
@@ -1186,12 +1203,14 @@ static int ssr_modem_cb(struct notifier_block *this,
 		if (ret < 0)
 			pr_err("failed to send mdsp down event to slate\n");
 		break;
-//	case SUBSYS_AFTER_DS_EXIT:
-//		msg_header.opcode = GMI_MGR_SSR_MPSS_UP_NOTIFICATION;
-//		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-//		if (ret < 0)
-//			pr_err("failed to send mdsp up event to slate\n");
-//		break;
+	case QCOM_SSR_BEFORE_POWERUP:
+		modeme.e_type = MODEM_BEFORE_POWER_UP;
+		send_uevent(&modeme);
+		msg_header.opcode = GMI_MGR_SSR_MPSS_UP_PRE_NOTIFICATION;
+		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
+		if (ret < 0)
+			pr_err("failed to send mdsp up pre-event to slate\n");
+		break;
 	case QCOM_SSR_AFTER_POWERUP:
 		modeme.e_type = MODEM_AFTER_POWER_UP;
 		send_uevent(&modeme);
@@ -1212,27 +1231,32 @@ static int ssr_adsp_cb(struct notifier_block *this,
 	int ret = 0;
 
 	switch (opcode) {
-//	case SUBSYS_AFTER_DS_ENTRY:
-//		msg_header.opcode = GMI_MGR_SSR_ADSP_DOWN_INDICATION;
-//		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-//		if (ret < 0)
-//			pr_err("failed to send adsp down event to slate\n");
-//		break;
 	case QCOM_SSR_BEFORE_SHUTDOWN:
 		adspe.e_type = ADSP_BEFORE_POWER_DOWN;
+		reinit_completion(&slate_adsp_down_wait);
+		send_uevent(&adspe);
+		msg_header.opcode = GMI_MGR_SSR_ADSP_DOWN_PRE_INDICATION;
+		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
+		if (ret < 0)
+			pr_err("failed to send adsp down pre-event to slate\n");
+		break;
+	case QCOM_SSR_AFTER_SHUTDOWN:
+		adspe.e_type = ADSP_AFTER_POWER_DOWN;
 		reinit_completion(&slate_adsp_down_wait);
 		send_uevent(&adspe);
 		msg_header.opcode = GMI_MGR_SSR_ADSP_DOWN_INDICATION;
 		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
 		if (ret < 0)
-			pr_err("failed to send adsp up event to slate\n");
+			pr_err("failed to send adsp down event to slate\n");
 		break;
-//	case SUBSYS_AFTER_DS_EXIT:
-//		msg_header.opcode = GMI_MGR_SSR_ADSP_UP_INDICATION;
-//		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-//		if (ret < 0)
-//			pr_err("failed to send adsp up event to slate\n");
-//		break;
+	case QCOM_SSR_BEFORE_POWERUP:
+		adspe.e_type = ADSP_BEFORE_POWER_UP;
+		send_uevent(&adspe);
+		msg_header.opcode = GMI_MGR_SSR_ADSP_UP_PRE_INDICATION;
+		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
+		if (ret < 0)
+			pr_err("failed to send adsp up pre-event to slate\n");
+		break;
 	case QCOM_SSR_AFTER_POWERUP:
 		adspe.e_type = ADSP_AFTER_POWER_UP;
 		send_uevent(&adspe);

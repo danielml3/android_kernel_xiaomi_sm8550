@@ -433,18 +433,23 @@ void slatecom_slatedown_handler(void)
 }
 EXPORT_SYMBOL(slatecom_slatedown_handler);
 
-static void parse_fifo(uint8_t *data, union slatecom_event_data_type *event_data)
+static void parse_fifo(uint8_t *data, uint16_t data_len, union slatecom_event_data_type *event_data)
 {
 	uint16_t p_len;
 	uint16_t event_id;
 	void *evnt_data;
 
 	while (*data != '\0') {
-
+		if (data_len < HED_EVENT_ID_LEN)
+			break;
 		event_id = *((uint16_t *) data);
 		data = data + HED_EVENT_ID_LEN;
+		data_len = data_len - HED_EVENT_ID_LEN;
+		if (data_len < HED_EVENT_SIZE_LEN)
+			break;
 		p_len = *((uint16_t *) data);
 		data = data + HED_EVENT_SIZE_LEN;
+		data_len = data_len - HED_EVENT_SIZE_LEN;
 
 		if (event_id == 0x0001) {
 			evnt_data = kmalloc(p_len, GFP_KERNEL);
@@ -458,10 +463,12 @@ static void parse_fifo(uint8_t *data, union slatecom_event_data_type *event_data
 			}
 		} else if (event_id == 0xc8) {
 			data = data + 12;
-			pr_err("Packet Received = 0x%X, len = %u\n", event_id, p_len);
+			data_len = data_len - 12;
+			SLATECOM_INFO("Packet Received = 0x%X, len = %u\n", event_id, p_len);
 		}
 
 		data = data + p_len;
+		data_len = data_len - p_len;
 	}
 	if (!list_empty(&pr_lst_hd))
 		queue_work(wq, &input_work);
@@ -575,7 +582,8 @@ static void send_back_notification(uint32_t slav_status_reg,
 			if (!ret) {
 				augmnt_fifo((uint8_t *)ptr,
 					master_fifo_used*SLATE_SPI_WORD_SIZE);
-				parse_fifo((uint8_t *)ptr, &event_data);
+				parse_fifo((uint8_t *)ptr,
+					master_fifo_used*SLATE_SPI_WORD_SIZE, &event_data);
 			}
 			kfree(ptr);
 		}
@@ -653,7 +661,7 @@ static int wakeup_ahb_read(void *handle)
 	uint8_t cmnd = 0;
 	int ret = 0;
 
-	pr_err("slatecom AHB read to resume\n");
+	SLATECOM_INFO("slatecom AHB read to resume\n");
 	tx_ahb_buf = kmalloc(TX_AHB_BUF_SIZE, GFP_KERNEL | GFP_ATOMIC);
 	if (!tx_ahb_buf)
 		return -ENOMEM;
@@ -812,7 +820,7 @@ static int slatecom_resume_l(void *handle)
 	}
 
 complete:
-	SLATECOM_ERR("slatecom resume completed\n");
+	SLATECOM_INFO("slatecom resume completed\n");
 	atomic_set(&state, SLATECOM_STATE_ACTIVE);
 	atomic_set(&slate_is_spi_active, 1);
 
@@ -1760,7 +1768,7 @@ static int slatecom_pm_runtime_suspend(struct device *dev)
 	struct slate_spi_priv *slate_spi = spi_get_drvdata(s_dev);
 	int ret = 0;
 
-	SLATECOM_ERR("entry\n");
+	SLATECOM_INFO("entry\n");
 	clnt_handle.slate_spi = slate_spi;
 
 	if (atomic_read(&state) == SLATECOM_STATE_RUNTIME_SUSPEND)
@@ -1794,7 +1802,7 @@ static int slatecom_pm_runtime_resume(struct device *dev)
 	struct slate_spi_priv *spi =
 		container_of(slate_com_drv, struct slate_spi_priv, lhandle);
 
-	SLATECOM_ERR("entry\n");
+	SLATECOM_INFO("entry\n");
 	clnt_handle.slate_spi = spi;
 
 	if (atomic_read(&spi->irq_lock) == 1) {
@@ -1808,7 +1816,7 @@ static int slatecom_pm_runtime_resume(struct device *dev)
 	atomic_set(&slate_is_spi_active, 1);
 	atomic_set(&slate_is_runtime_suspend, 0);
 	ret = slatecom_resume_l(&clnt_handle);
-	SLATECOM_ERR("Slatecom Runtime resumed with : %d\n", ret);
+	SLATECOM_INFO("Slatecom Runtime resumed with : %d\n", ret);
 	mutex_unlock(&slate_task_mutex);
 	return ret;
 }
