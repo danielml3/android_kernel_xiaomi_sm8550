@@ -101,9 +101,16 @@ static bool con_enabled = IS_ENABLED(CONFIG_SERIAL_MSM_GENI_CONSOLE_DEFAULT_ENAB
 #define UART_START_TX		(0x1)
 #define UART_START_BREAK	(0x4)
 #define UART_STOP_BREAK		(0x5)
+
 /* UART S_CMD OP codes */
-#define UART_START_READ		(0x1)
-#define UART_PARAM		(0x1)
+#define UART_START_READ			(0x1)
+#define UART_PARAM			(0x1)
+
+/* When set character with framing error is not written in RX fifo */
+#define UART_PARAM_SKIP_FRAME_ERR_CHAR	(BIT(5))
+
+/* When set break character is not written in RX fifo */
+#define UART_PARAM_SKIP_BREAK_CHAR	(BIT(6))
 #define UART_PARAM_RFR_OPEN		(BIT(7))
 
 /* UART DMA Rx GP_IRQ_BITS */
@@ -2097,7 +2104,10 @@ static void msm_geni_uart_gsi_cancel_tx(struct work_struct *work)
 			struct msm_geni_serial_port,
 			tx_cancel_work);
 
-	dmaengine_terminate_all(msm_port->gsi->tx_c);
+	if (msm_port->gsi->tx_c && dmaengine_terminate_all(msm_port->gsi->tx_c))
+		IPC_LOG_MSG(msm_port->ipc_log_misc,
+			    "%s: dmaengine_terminate_all failed for Tx ch\n",
+			    __func__);
 }
 
 static void msm_geni_uart_gsi_cancel_rx(struct work_struct *work)
@@ -2114,8 +2124,10 @@ static void msm_geni_uart_gsi_cancel_rx(struct work_struct *work)
 		atomic_set(&msm_port->stop_rx_inprogress, 0);
 		return;
 	}
-	if (msm_port->gsi->rx_c)
-		dmaengine_terminate_all(msm_port->gsi->rx_c);
+	if (msm_port->gsi->rx_c && dmaengine_terminate_all(msm_port->gsi->rx_c))
+		IPC_LOG_MSG(msm_port->ipc_log_misc,
+			    "%s: dmaengine_terminate_all failed for Rx ch\n",
+			    __func__);
 	complete(&msm_port->xfer);
 	msm_port->gsi_rx_done = false;
 	atomic_set(&msm_port->stop_rx_inprogress, 0);
@@ -2162,6 +2174,7 @@ static int msm_geni_uart_gsi_xfer_rx(struct uart_port *uport)
 			for (k = i; k > 0; k--) {
 				geni_se_common_iommu_free_buf(rx_dev, &msm_port->dma_addr[k - 1],
 						msm_port->rx_gsi_buf[k - 1], DMA_RX_BUF_SIZE);
+				msm_port->rx_gsi_buf[k - 1] = NULL;
 			}
 			msm_geni_deallocate_chan(uport);
 			return -EIO;
@@ -2205,6 +2218,7 @@ exit_gsi_xfer_rx:
 	for (i = 0; i < NUM_RX_BUF; i++) {
 		geni_se_common_iommu_free_buf(rx_dev, &msm_port->dma_addr[i],
 					      msm_port->rx_gsi_buf[i], DMA_RX_BUF_SIZE);
+		msm_port->rx_gsi_buf[i] = NULL;
 	}
 	msm_geni_deallocate_chan(uport);
 	msm_port->gsi_rx_done = false;
@@ -2576,7 +2590,8 @@ static void start_rx_sequencer(struct uart_port *uport)
 {
 	unsigned int geni_status;
 	struct msm_geni_serial_port *port = GET_DEV_PORT(uport);
-	u32 geni_se_param = UART_PARAM_RFR_OPEN;
+	u32 geni_se_param = (UART_PARAM_SKIP_FRAME_ERR_CHAR |
+			     UART_PARAM_SKIP_BREAK_CHAR | UART_PARAM_RFR_OPEN);
 
 	if (port->startup_in_progress)
 		return;
@@ -2617,7 +2632,10 @@ static void start_rx_sequencer(struct uart_port *uport)
 							&port->rx_dma);
 	}
 
-	/* Start RX with the RFR_OPEN to keep RFR in always ready state */
+	/* Start RX with the RFR_OPEN to keep RFR in always ready state.
+	 * Configure for character with Framing error & Break character
+	 * is not written in RX fifo.
+	 */
 	geni_se_setup_s_cmd(&port->se, UART_START_READ, geni_se_param);
 	msm_geni_serial_enable_interrupts(uport);
 
@@ -3439,7 +3457,6 @@ static bool handle_rx_dma_xfer(u32 s_irq_status, struct uart_port *uport)
 				     "%s dma_rx_status:0x%x Rx Framing error:%d\n",
 				     __func__, dma_rx_status,
 				     uport->icount.frame);
-			drop_rx = true;
 		}
 
 		if (dma_rx_status & UART_DMA_RX_BREAK) {
@@ -3764,7 +3781,7 @@ static void msm_geni_serial_flush(struct uart_port *uport)
 	struct msm_geni_serial_port *port = GET_DEV_PORT(uport);
 
 	atomic_set(&port->flush_buffers, 1);
-	stop_tx_sequencer(uport);
+	msm_geni_serial_stop_tx(uport);
 }
 
 static void msm_geni_serial_shutdown(struct uart_port *uport)
@@ -3813,12 +3830,18 @@ static void msm_geni_serial_shutdown(struct uart_port *uport)
 				UART_LOG_DBG(msm_port->ipc_log_misc,
 					     uport->dev,
 					     "%s:GSI DMA-Rx ch\n", __func__);
+				dma_release_channel(msm_port->gsi->rx_c);
 				for (i = 0; i < 4; i++) {
-					geni_se_common_iommu_free_buf(rx_dev,
-								      &msm_port->dma_addr[i],
-								      msm_port->rx_gsi_buf[i],
-								      DMA_RX_BUF_SIZE);
+					if (msm_port->dma_addr[i]) {
+						geni_se_common_iommu_free_buf(rx_dev,
+								&msm_port->dma_addr[i],
+								msm_port->rx_gsi_buf[i],
+								DMA_RX_BUF_SIZE);
+						msm_port->rx_gsi_buf[i] = NULL;
+					}
+
 				}
+				msm_port->gsi->rx_c = NULL;
 				UART_LOG_DBG(msm_port->ipc_log_misc,
 					     uport->dev, "%s:Unmap buf done\n",
 					     __func__);
@@ -3827,7 +3850,7 @@ static void msm_geni_serial_shutdown(struct uart_port *uport)
 				UART_LOG_DBG(msm_port->ipc_log_misc,
 					     uport->dev, "%s:GSI DMA-Tx ch\n",
 					     __func__);
-				msm_geni_serial_stop_tx(uport);
+				dma_release_channel(msm_port->gsi->tx_c);
 				if (msm_port->tx_dma) {
 					geni_se_common_iommu_unmap_buf(tx_dev,
 								       &msm_port->tx_dma,
@@ -3837,6 +3860,7 @@ static void msm_geni_serial_shutdown(struct uart_port *uport)
 						     uport->dev, "%s:Unmap buf done\n",
 						     __func__);
 				}
+				msm_port->gsi->tx_c = NULL;
 			}
 		} else {
 			msm_geni_serial_stop_tx(uport);

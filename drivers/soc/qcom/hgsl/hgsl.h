@@ -56,14 +56,23 @@ struct db_buffer {
 	void  *vaddr;
 };
 
+struct dbq_ibdesc_priv {
+	bool   buf_inuse;
+	uint32_t context_id;
+	uint32_t timestamp;
+};
+
 struct doorbell_queue {
 	struct dma_buf *dma;
 	struct dma_buf_map map;
 	void *vbase;
+	uint64_t  gmuaddr;
 	struct db_buffer data;
 	uint32_t state;
 	int tcsr_idx;
 	uint32_t dbq_idx;
+	struct dbq_ibdesc_priv ibdesc_priv;
+	uint32_t  ibdesc_max_size;
 	struct mutex lock;
 	atomic_t seq_num;
 };
@@ -125,6 +134,12 @@ struct qcom_hgsl {
 	spinlock_t isync_timeline_lock;
 	atomic64_t total_mem_size;
 	bool default_iocoherency;
+
+	/* Debug nodes */
+	struct kobject sysfs;
+	struct kobject *clients_sysfs;
+	struct dentry *debugfs;
+	struct dentry *clients_debugfs;
 };
 
 /**
@@ -169,6 +184,14 @@ struct hgsl_priv {
 	struct list_head mem_allocated;
 
 	atomic64_t total_mem_size;
+
+	/* sysfs stuff */
+	struct kobject kobj;
+	struct kobject sysfs_client;
+	struct kobject sysfs_mem_size;
+	struct dentry *debugfs_client;
+	struct dentry *debugfs_mem;
+	struct dentry *debugfs_memtype;
 };
 
 
