@@ -6,6 +6,7 @@
  */
 
 #include <linux/module.h>
+#include <soc/qcom/socinfo.h>
 
 #include "hwid.h"
 
@@ -17,6 +18,18 @@
 #define HW_MINOR_VERSION_MASK       0x0000FFFF
 #define HW_COUNTRY_VERSION_MASK     0xFFF00000
 #define HW_BUILD_VERSION_MASK       0x000F0000
+
+char *SOC_207_PRODUCTS[] = {
+	"nuwa",
+	"fuxi",
+	"wangshu",
+	"socrates",
+	"ishtar",
+	"babylon",
+	"vermeer",
+	"sheng"
+};
+int SOC_207_PRODUCT_CNT = sizeof(SOC_207_PRODUCTS) / sizeof(char*);
 
 static uint project;
 module_param(project, uint, 0444);
@@ -59,6 +72,31 @@ uint32_t get_hw_version_build(void)
 	return (hwid_value & HW_BUILD_VERSION_MASK) >> HW_BUILD_VERSION_SHIFT;
 }
 EXPORT_SYMBOL(get_hw_version_build);
+
+char* product_name_get(void) {
+	int soc_id = socinfo_get_id();
+	char **product_array = NULL;
+	int product_count = 0;
+	int index = 0;
+
+	switch(soc_id) {
+		case 0x207: // SM8550
+			product_array = SOC_207_PRODUCTS;
+			product_count = SOC_207_PRODUCT_CNT;
+			index = project - 1;
+			break;
+		default:
+			goto unknown;
+	}
+
+	if (index < product_count && product_array != NULL) {
+		return product_array[index];
+	}
+
+unknown:
+	return "unknown";
+}
+EXPORT_SYMBOL(product_name_get);
 
 MODULE_AUTHOR("weixiaotian1@xiaomi.com");
 MODULE_LICENSE("GPL v2");
