@@ -2177,3 +2177,7 @@ source "arch/arm64/gunyah/Kconfig"
 if CRYPTO
 source "arch/arm64/crypto/Kconfig"
 endif
+
+config TARGET_PRODUCT_SOCRATES
+	bool "Target product is socrates"
+	default n
