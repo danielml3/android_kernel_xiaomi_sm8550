@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef __MSM_GPI_H_
@@ -346,6 +346,7 @@ struct gsi_common {
  * whenever client met some scenario like timeout, error in GPI transfer mode.
  */
 void gpi_dump_for_geni(struct dma_chan *chan);
+void gpi_update_multi_desc_flag(struct dma_chan *chan, bool is_multi_descriptor, int num_msgs);
 int geni_gsi_common_request_channel(struct gsi_common *gsi);
 int gsi_common_prep_desc_and_submit(struct gsi_common *gsi, int segs, bool tx_chan, bool skip_cb);
 int gsi_common_fill_tre_buf(struct gsi_common *gsi, bool tx_chan);

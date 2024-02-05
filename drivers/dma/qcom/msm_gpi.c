@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/atomic.h>
@@ -596,6 +596,8 @@ struct gpii {
 	bool unlock_tre_set;
 	bool dual_ee_sync_flag;
 	bool is_resumed;
+	bool is_multi_desc;
+	int num_msgs;
 };
 
 struct gpi_desc {
@@ -866,6 +868,25 @@ void gpi_dump_for_geni(struct dma_chan *chan)
 	gpi_dump_debug_reg(gpii);
 }
 EXPORT_SYMBOL(gpi_dump_for_geni);
+
+/**
+ * gpi_update_multi_desc_flag() - update multi descriptor flag and num of msgs for
+ *				   multi descriptor mode handling.
+ * @chan: Base address of dma channel
+ * @is_multi_descriptor: is multi descriptor flag
+ * @num_msgs: number of client messages
+ *
+ * Return:None
+ */
+void gpi_update_multi_desc_flag(struct dma_chan *chan, bool is_multi_descriptor, int num_msgs)
+{
+	struct gpii_chan *gpii_chan = to_gpii_chan(chan);
+	struct gpii *gpii = gpii_chan->gpii;
+
+	gpii->is_multi_desc = is_multi_descriptor;
+	gpii->num_msgs = num_msgs;
+}
+EXPORT_SYMBOL_GPL(gpi_update_multi_desc_flag);
 
 static void gpi_disable_interrupts(struct gpii *gpii)
 {
@@ -1803,6 +1824,8 @@ static void gpi_process_imed_data_event(struct gpii_chan *gpii_chan,
 	gpi_desc = to_gpi_desc(vd);
 	spin_unlock_irqrestore(&gpii_chan->vc.lock, flags);
 
+	if (gpii->is_multi_desc)
+		gpii->num_msgs--;
 
 	/*
 	 * RP pointed by Event is to last TRE processed,
@@ -1825,22 +1848,32 @@ static void gpi_process_imed_data_event(struct gpii_chan *gpii_chan,
 	 */
 	chid = imed_event->chid;
 	if (gpii->unlock_tre_set) {
-		if (chid == GPI_RX_CHAN) {
-			if (imed_event->code == MSM_GPI_TCE_EOT)
-				goto gpi_free_desc;
-			else if (imed_event->code == MSM_GPI_TCE_UNEXP_ERR)
-				/*
-				 * In case of an error in a read transfer on a
-				 * shared se, unlock tre will not be processed
-				 * as channels go to bad state so tx desc should
-				 * be freed manually.
-				 */
-				gpi_free_chan_desc(gpii_tx_chan);
-			else
+		if (!gpii->is_multi_desc) {
+			if (chid == GPI_RX_CHAN) {
+				if (imed_event->code == MSM_GPI_TCE_EOT)
+					goto gpi_free_desc;
+				else if (imed_event->code == MSM_GPI_TCE_UNEXP_ERR)
+					/*
+					 * In case of an error in a read transfer on a
+					 * shared se, unlock tre will not be processed
+					 * as channels go to bad state so tx desc should
+					 * be freed manually.
+					 */
+					gpi_free_chan_desc(gpii_tx_chan);
+				else
+					return;
+			} else if (imed_event->code == MSM_GPI_TCE_EOT) {
 				return;
-		} else if (imed_event->code == MSM_GPI_TCE_EOT) {
-			return;
+			}
+		} else {
+			/*
+			 * Multi descriptor case waiting for unlock
+			 * tre eob, so not freeeing last descriptor
+			 */
+			if (gpii->num_msgs == 0)
+				return;
 		}
+
 	} else if (imed_event->code == MSM_GPI_TCE_EOB) {
 		goto gpi_free_desc;
 	}
@@ -1909,6 +1942,8 @@ static void gpi_process_xfer_compl_event(struct gpii_chan *gpii_chan,
 	gpi_desc = to_gpi_desc(vd);
 	spin_unlock_irqrestore(&gpii_chan->vc.lock, flags);
 
+	if (gpii->is_multi_desc)
+		gpii->num_msgs--;
 
 	/*
 	 * RP pointed by Event is to last TRE processed,
@@ -1931,28 +1966,37 @@ static void gpi_process_xfer_compl_event(struct gpii_chan *gpii_chan,
 	 */
 	chid = compl_event->chid;
 	if (gpii->unlock_tre_set) {
-		if (chid == GPI_RX_CHAN) {
-			if (compl_event->code == MSM_GPI_TCE_EOT)
-				goto gpi_free_desc;
-			else if (compl_event->code == MSM_GPI_TCE_UNEXP_ERR)
-				/*
-				 * In case of an error in a read transfer on a
-				 * shared se, unlock tre will not be processed
-				 * as channels go to bad state so tx desc should
-				 * be freed manually.
-				 */
-				gpi_free_chan_desc(gpii_tx_chan);
-			else
+		if (!gpii->is_multi_desc) {
+			if (chid == GPI_RX_CHAN) {
+				if (compl_event->code == MSM_GPI_TCE_EOT)
+					goto gpi_free_desc;
+				else if (compl_event->code == MSM_GPI_TCE_UNEXP_ERR)
+					/*
+					 * In case of an error in a read transfer on a
+					 * shared se, unlock tre will not be processed
+					 * as channels go to bad state so tx desc should
+					 * be freed manually.
+					 */
+					gpi_free_chan_desc(gpii_tx_chan);
+				else
+					return;
+			} else if (compl_event->code == MSM_GPI_TCE_EOT) {
 				return;
-		} else if (compl_event->code == MSM_GPI_TCE_EOT) {
-			return;
+			}
+		} else {
+			/*
+			 * Multi descriptor case waiting for unlock
+			 * tre eob, so not freeeing last descriptor
+			 */
+			if (gpii->num_msgs == 0)
+				return;
 		}
+
 	} else if (compl_event->code == MSM_GPI_TCE_EOB) {
 		if (!(gpii_chan->num_tre == 1 && gpii_chan->lock_tre_set)
 			&& (gpii->protocol != SE_PROTOCOL_UART))
 			goto gpi_free_desc;
 	}
-
 	tx_cb_param = vd->tx.callback_param;
 	if (vd->tx.callback && tx_cb_param) {
 		GPII_VERB(gpii, gpii_chan->chid,
