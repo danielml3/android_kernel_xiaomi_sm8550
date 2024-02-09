@@ -350,6 +350,13 @@
 #define is_between(val, min, max)	\
 	(((min) <= (max)) && ((min) <= (val)) && ((val) <= (max)))
 
+#define CANCEL_DELAY_MS 50
+#define FIFO_PLAY_STOP_DELAY 9
+
+#if defined(CONFIG_TARGET_PRODUCT_SOCRATES)
+#define QCOM_HAPTIC_F0_PROTECT
+#endif
+
 enum hap_status_sel {
 	CAL_TLRA_CL_STS = 0x00,
 	T_WIND_STS,
@@ -609,6 +616,7 @@ struct haptics_chip {
 	struct class			hap_class;
 	struct regulator		*hpwr_vreg;
 	struct hrtimer			hbst_off_timer;
+	struct hrtimer 			delay_off_timer;
 	struct notifier_block		hboost_nb;
 	struct mutex			vmax_lock;
 	struct work_struct		set_gain_work;
@@ -622,6 +630,7 @@ struct haptics_chip {
 	u32				clamped_vmax_mv;
 	u32				wa_flags;
 	u32				primitive_duration;
+	u32				delay_ms;
 	u8				cfg_rev1;
 	u8				cfg_revision;
 	u8				ptn_revision;
@@ -635,12 +644,40 @@ struct haptics_chip {
 	bool				hpwr_vreg_enabled;
 	bool				is_hv_haptics;
 	bool				hboost_enabled;
+	bool				hboost_quick_off;
 };
 
 struct haptics_reg_info {
 	u8 addr;
 	u8 val;
 };
+
+static enum hrtimer_restart haptics_disable_fifo_delay_timer(struct hrtimer *timer) {
+	struct haptics_chip *chip = container_of(timer,
+		struct haptics_chip, delay_off_timer);
+
+	chip->delay_ms = 0;
+	dev_info(chip->dev, "cancel delay for play fifo(after direct play)\n");
+	return HRTIMER_NORESTART;
+}
+
+#define HAP_MS_TO_NS(ms) (ms * 1000 * 1000ULL)
+static void restart_fifo_delay_timer(struct haptics_chip *chip, u32 delay_ms) {
+
+	if ((hrtimer_get_remaining(&chip->delay_off_timer) > 0) || hrtimer_active(&chip->delay_off_timer)) {
+		hrtimer_cancel(&chip->delay_off_timer);
+	}
+
+	chip->delay_ms = delay_ms;
+
+	hrtimer_start(
+		&chip->delay_off_timer,
+		ktime_set(0, HAP_MS_TO_NS(CANCEL_DELAY_MS)),
+		HRTIMER_MODE_REL
+	);
+
+	dev_info(chip->dev, "restart_fifo_delay_timer: set delay %dms\n", delay_ms);
+}
 
 static inline int get_max_fifo_samples(struct haptics_chip *chip)
 {
@@ -1069,6 +1106,13 @@ static int haptics_get_closeloop_lra_period(
 	u64 tmp;
 	int rc;
 
+#ifdef QCOM_HAPTIC_F0_PROTECT
+	/* protect low rate of xbl f0 abnormal */
+	int f0_mix, f0_max, f0_default, f0_cnt;
+	int rc1, rc2, rc3, rc4;
+	struct device_node *node = chip->dev->of_node;
+#endif
+
 	/* read RC_CLK_CAL enabling mode */
 	rc = haptics_read(chip, chip->cfg_addr_base,
 			HAP_CFG_CAL_EN_REG, val, 1);
@@ -1201,6 +1245,39 @@ static int haptics_get_closeloop_lra_period(
 				rc_clk_cal);
 		return -EINVAL;
 	}
+
+#ifdef QCOM_HAPTIC_F0_PROTECT
+	/* protect low rate of xbl f0 abnormal */
+	if(in_boot){
+		u32  xbl_f0 = USEC_PER_SEC / config->cl_t_lra_us;
+		dev_info(chip->dev, "xbl f0  =%d \n", xbl_f0);
+		rc1 = of_property_read_u32(node, "qcom,lra-f0-min", &f0_mix);
+		if (rc1 < 0) {
+			dev_err(chip->dev, "lra-f0-min failed, rc=%d\n", rc);
+		}
+		rc2 = of_property_read_u32(node, "qcom,lra-f0-max", &f0_max);
+		if (rc2 < 0) {
+			dev_err(chip->dev, "lra-f0-max failed, rc=%d\n", rc);
+		}
+		rc3 = of_property_read_u32(node, "qcom,lra-f0-default", &f0_default);
+		if (rc3 < 0) {
+			dev_err(chip->dev, "lra-f0-default failed, rc=%d\n", rc);
+		}
+		rc4 = of_property_read_u32(node, "qcom,lra-f0-cal-count", &f0_cnt);
+		if (rc4 < 0) {
+			dev_err(chip->dev, "lra-f0-cal-count failed, rc=%d\n", rc);
+		}
+		if (rc1 >= 0 && rc2 >= 0 && rc3 >= 0 && rc4 >= 0) {
+			if (xbl_f0 > f0_max || xbl_f0 < f0_mix) {
+				dev_info(chip->dev, "xbl f0 abnormal: %d ~ 0x%x use default: %d ~ 0x%x f0:%d - %d after boot\n",xbl_f0, config->rc_clk_cal_count, f0_default, f0_cnt, f0_mix, f0_max);
+				config->cl_t_lra_us = USEC_PER_SEC / f0_default;
+				config->rc_clk_cal_count = f0_cnt;
+			}
+		} else {
+			dev_err(chip->dev, "lra-f0: default min max count must set together in dtsi\n");
+		}
+	}
+#endif
 
 	dev_dbg(chip->dev, "OL_TLRA %u us, CL_TLRA %u us, RC_CLK_CAL_COUNT %#x\n",
 		chip->config.t_lra_us, chip->config.cl_t_lra_us,
@@ -2336,7 +2413,11 @@ static int haptics_init_custom_effect(struct haptics_chip *chip)
 	chip->custom_effect->pattern = NULL;
 	chip->custom_effect->brake = NULL;
 	chip->custom_effect->id = UINT_MAX;
+#if defined(CONFIG_TARGET_PRODUCT_SOCRATES)
+	chip->custom_effect->vmax_mv = 7800;
+#else
 	chip->custom_effect->vmax_mv = chip->config.vmax_mv;
+#endif
 	chip->custom_effect->t_lra_us = chip->config.t_lra_us;
 	chip->custom_effect->src = FIFO;
 	chip->custom_effect->auto_res_disable = true;
@@ -2400,6 +2481,11 @@ static int haptics_load_custom_effect(struct haptics_chip *chip,
 	struct fifo_cfg *fifo;
 	int rc;
 
+	if (play->pattern_src == DIRECT_PLAY && chip->delay_ms > 0) {
+		msleep(chip->delay_ms);
+		dev_dbg(chip->dev, "direct-play detected, delay %dms", chip->delay_ms);
+	}
+
 	if (!chip->custom_effect || !chip->custom_effect->fifo)
 		return -ENOMEM;
 
@@ -2452,6 +2538,8 @@ static int haptics_load_custom_effect(struct haptics_chip *chip,
 
 	play->effect = chip->custom_effect;
 	play->brake = NULL;
+	magnitude = ((magnitude - 0x3fff) / (0x7fff - 0x3fff)) * (0x7fff - 0x2fff) + 0x2fff;
+	dev_dbg(chip->dev, "set magnitude on custom effect, rc=%d\n", magnitude);
 	play->vmax_mv = (magnitude * chip->custom_effect->vmax_mv) / 0x7fff;
 	rc = haptics_set_vmax_mv(chip, play->vmax_mv);
 	if (rc < 0)
@@ -2665,6 +2753,12 @@ static int haptics_upload_effect(struct input_dev *dev,
 	u8 amplitude;
 	int rc = 0;
 
+	if(effect->type == FF_DAMPER) {
+		chip->hboost_quick_off = true;
+		dev_info(chip->dev, "set hboost quick off!");
+		return 0;
+	}
+
 	switch (effect->type) {
 	case FF_CONSTANT:
 		length_ms = effect->replay.length;
@@ -2761,11 +2855,25 @@ static int haptics_erase(struct input_dev *dev, int effect_id)
 	struct haptics_play_info *play = &chip->play;
 	int rc;
 
+	if(chip->hboost_quick_off) {
+		rc = haptics_boost_vreg_enable(chip, false);
+		if(rc < 0)
+			dev_err(chip->dev, "hboost quick off failed, rc=%d\n", rc);
+		else
+			dev_info(chip->dev, "hboost quick off\n");
+		chip->hboost_quick_off = false;
+		return 0;
+	}
+
 	dev_dbg(chip->dev, "erase effect, really stop play\n");
 	mutex_lock(&play->lock);
 	cancel_delayed_work_sync(&chip->stop_work);
 	if ((play->pattern_src == FIFO) &&
 			atomic_read(&play->fifo_status.is_busy)) {
+#ifdef FIFO_PLAY_STOP_DELAY
+		msleep(FIFO_PLAY_STOP_DELAY);
+		dev_info(chip->dev, "fifo play stop delay %d ms\n", FIFO_PLAY_STOP_DELAY);
+#endif
 		if (atomic_read(&play->fifo_status.written_done) == 0) {
 			dev_dbg(chip->dev, "cancelling FIFO playing\n");
 			atomic_set(&play->fifo_status.cancelled, 1);
@@ -2780,6 +2888,9 @@ static int haptics_erase(struct input_dev *dev, int effect_id)
 		}
 	} else {
 		rc = haptics_enable_play(chip, false);
+		// delay 5ms for play fifo after direct play
+		if (play->pattern_src == DIRECT_PLAY)
+			restart_fifo_delay_timer(chip, 5);
 		if (rc < 0) {
 			dev_err(chip->dev, "stop play failed, rc=%d\n", rc);
 			mutex_unlock(&play->lock);
@@ -5286,7 +5397,11 @@ static int haptics_detect_lra_frequency(struct haptics_chip *chip)
 	if (rc < 0)
 		goto restore;
 
+#if defined(CONFIG_TARGET_PRODUCT_SOCRATES)
+	rc = haptics_config_openloop_lra_period(chip, 5714);
+#else
 	rc = haptics_config_openloop_lra_period(chip, chip->config.t_lra_us);
+#endif
 	if (rc < 0)
 		goto restore;
 
@@ -5298,7 +5413,11 @@ static int haptics_detect_lra_frequency(struct haptics_chip *chip)
 	if (is_haptics_external_powered(chip))
 		vmax_mv = chip->hpwr_voltage_mv - LRA_CALIBRATION_VMAX_HDRM_MV;
 
+#if defined(CONFIG_TARGET_PRODUCT_SOCRATES)
+	rc = haptics_set_vmax_mv(chip, 1400);
+#else
 	rc = haptics_set_vmax_mv(chip, vmax_mv);
+#endif
 	if (rc < 0)
 		goto restore;
 
@@ -5621,6 +5740,10 @@ static int haptics_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&chip->stop_work, haptics_stop_constant_effect_play);
 	INIT_WORK(&chip->set_gain_work, haptics_set_gain_work);
 
+	hrtimer_init(&chip->delay_off_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	chip->delay_off_timer.function = haptics_disable_fifo_delay_timer;
+	chip->delay_ms = 0;
+
 	atomic_set(&chip->play.fifo_status.is_busy, 0);
 	atomic_set(&chip->play.fifo_status.written_done, 0);
 	atomic_set(&chip->play.fifo_status.cancelled, 0);
@@ -5633,6 +5756,7 @@ static int haptics_probe(struct platform_device *pdev)
 	if ((chip->effects_count != 0) || (chip->primitives_count != 0)) {
 		input_set_capability(input_dev, EV_FF, FF_PERIODIC);
 		input_set_capability(input_dev, EV_FF, FF_CUSTOM);
+		input_set_capability(input_dev, EV_FF, FF_DAMPER);
 	}
 
 	if (chip->effects_count + chip->primitives_count > MAX_EFFECT_COUNT)
