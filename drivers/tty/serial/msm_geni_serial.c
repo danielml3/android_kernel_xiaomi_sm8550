@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2022, The Linux Foundation. All rights reserved.
  */
 
@@ -2024,6 +2024,8 @@ static void msm_geni_uart_gsi_xfer_tx(struct work_struct *work)
 
 	dump_ipc(uport, msm_port->ipc_log_tx, "DMA Tx",
 		 (char *)&xmit->buf[xmit->tail], 0, xmit_size);
+	UART_LOG_DBG(msm_port->ipc_log_misc, uport->dev,
+		     "%s: cts_count:%d\n", __func__, uport->icount.cts);
 
 	ret = msm_geni_allocate_chan(uport);
 	if (ret) {
@@ -3604,9 +3606,11 @@ static void msm_geni_serial_handle_isr(struct uart_port *uport,
 		if (m_irq_status || s_irq_status ||
 			dma_tx_status || dma_rx_status) {
 			UART_LOG_DBG(msm_port->ipc_log_irqstatus, uport->dev,
-				"%s: sirq:0x%x mirq:0x%x dma_txirq:0x%x dma_rxirq:0x%x is_irq_masked:%d\n",
-				__func__, s_irq_status, m_irq_status,
-				dma_tx_status, dma_rx_status, is_irq_masked);
+				     "%s: sirq:0x%x mirq:0x%x dma_txirq:0x%x\n",
+				      __func__, s_irq_status, m_irq_status, dma_tx_status);
+			UART_LOG_DBG(msm_port->ipc_log_irqstatus, uport->dev,
+				     "%s: dma_rxirq:0x%x is_irq_masked:%d cts_count:%d\n",
+				      __func__, dma_rx_status, is_irq_masked, uport->icount.cts);
 		}
 
 		/* uport->state->port.tty pointer initialized as part of
