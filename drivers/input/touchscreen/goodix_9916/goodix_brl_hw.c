@@ -48,6 +48,8 @@ enum brl_request_code {
 	BRL_REQUEST_CODE_CLOCK = 0x04,
 };
 
+static int brld_set_coor_mode(struct goodix_ts_core *cd);
+
 static int brl_select_spi_mode(struct goodix_ts_core *cd)
 {
 	int ret;
@@ -298,6 +300,8 @@ static int brl_dev_confirm(struct goodix_ts_core *cd)
 		ts_err("device confirm failed, rx_buf:%*ph", 8, rx_buf);
 	}
 
+	cd->pending_init_coor_mode = true;
+
 	return ret;
 }
 
@@ -312,6 +316,8 @@ static int brl_reset(struct goodix_ts_core *cd, int delay)
 		usleep_range(delay * 1000, delay * 1000 + 100);
 	else
 		msleep(delay);
+
+	brld_set_coor_mode(cd);
 
 	return brl_select_spi_mode(cd);
 }
@@ -1158,7 +1164,83 @@ static int goodix_touch_handler(struct goodix_ts_core *cd,
 	if (buffer[3] & 0x01)
 		ts_debug("TODO add custom info process function");
 
+	cd->pending_init_coor_mode = false;
+
 	return 0;
+}
+
+static int brld_set_coor_mode(struct goodix_ts_core *cd) {
+	struct goodix_ts_cmd cmd;
+	int flag_addr = cd->ic_info.misc.touch_data_addr;
+	int retry = 20;
+	int ret;
+	u8 val;
+
+	if (cd->bus->ic_type != IC_TYPE_BERLIN_D || atomic_read(&cd->suspended) == 1)
+		return 0;
+
+	// Disable IRQ & ESD
+	brl_irq_enbale(cd, false);
+	goodix_ts_blocking_notify(NOTIFY_ESD_OFF, NULL);
+
+	// Disable rawdata mode
+	cmd.cmd = 0x90;
+	cmd.data[0] = 0;
+	cmd.len = 5;
+	ret = brl_send_cmd(cd, &cmd);
+	if (ret < 0) {
+		ts_err("could not disable rawdata mode, err %d", ret);
+		goto exit;
+	}
+
+	// Enable coor mode
+	cmd.cmd = 0x91;
+	cmd.data[0] = 1;
+	cmd.len = 5;
+	ret = brl_send_cmd(cd, &cmd);
+	if (ret < 0) {
+		ts_err("could not enable coor mode, err: %d", ret);
+		goto exit;
+	}
+
+	// Clear touch event flag
+	val = 0;
+	ret = brl_write(cd, flag_addr, &val, 1);
+	if (ret < 0) {
+		ts_err("failed to clear touch event flag");
+		goto exit;
+	}
+
+	// Wait for touch event
+	while (retry--) {
+		usleep_range(5000, 5100);
+		ret = brl_read(cd, flag_addr, &val, 1);
+		if (!ret && (val & GOODIX_TOUCH_EVENT)) {
+			ts_debug("found GOODIX_TOUCH_EVENT, %d retries remaining", retry);
+			break;
+		}
+	}
+
+	if (!retry) {
+		ts_err("touch data is not ready");
+		goto exit;
+	}
+
+	// Clear touch event flag
+	val = 0;
+	ret = brl_write(cd, flag_addr, &val, 1);
+	if (ret < 0) {
+		ts_err("failed to clear touch event flag");
+		goto exit;
+	}
+
+	ts_info("successfully enabled coor mode");
+exit:
+	// Enable IRQ & ESD
+	brl_irq_enbale(cd, true);
+	goodix_ts_blocking_notify(NOTIFY_ESD_ON, NULL);
+
+	return ret;
 }
 
 static int brl_event_handler(struct goodix_ts_core *cd,
@@ -1179,6 +1261,9 @@ static int brl_event_handler(struct goodix_ts_core *cd,
 		ts_err("failed get event head data");
 		return ret;
 	}
+
+	if (cd->pending_init_coor_mode)
+		brld_set_coor_mode(cd);
 
 	if (checksum_cmp(pre_buf, IRQ_EVENT_HEAD_LEN, CHECKSUM_MODE_U8_LE)) {
 		ts_err("touch head checksum err");

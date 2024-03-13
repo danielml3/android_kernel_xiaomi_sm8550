@@ -572,6 +572,7 @@ struct goodix_ts_core {
 	int power_status;
 	int report_rate;
 	bool tp_pm_suspend;
+	bool pending_init_coor_mode;
 	struct completion pm_resume_completion;
 	struct notifier_block notifier;
 };
