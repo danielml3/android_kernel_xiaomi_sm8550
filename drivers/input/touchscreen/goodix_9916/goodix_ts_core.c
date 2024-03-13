@@ -20,7 +20,6 @@
 #include <linux/seq_file.h>
 #include <linux/uaccess.h>
 
-#include "mi_disp_notifier.h"
 #include <linux/backlight.h>
 //#include <drm/drm_panel.h>
 #include <linux/power_supply.h>
