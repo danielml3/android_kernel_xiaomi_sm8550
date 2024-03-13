@@ -815,7 +815,7 @@ static ssize_t goodix_ts_aod_store(struct device *dev,
 	return count;
 }
 
-/* fod gesture show */
+/* fod_status show */
 static ssize_t goodix_ts_fod_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
@@ -827,7 +827,7 @@ static ssize_t goodix_ts_fod_show(struct device *dev,
 	return r;
 }
 
-/* fod gesture_store */
+/* fod_status store */
 static ssize_t goodix_ts_fod_store(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t count)
@@ -837,10 +837,38 @@ static ssize_t goodix_ts_fod_store(struct device *dev,
 
 	if (buf[0] != '0') {
 		goodix_core_data->fod_status = 1;
+	} else {
+		goodix_core_data->fod_status = 0;
+	}
+	return count;
+}
+
+/* fod_gesture show */
+static ssize_t goodix_ts_fod_gesture_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	int r = 0;
+
+	r = snprintf(buf, PAGE_SIZE, "state:%s\n",
+		     goodix_core_data->fod_gesture ? "enabled" : "disabled");
+
+	return r;
+}
+
+/* fod_gesture store */
+static ssize_t goodix_ts_fod_gesture_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	if (!buf || count <= 0)
+		return -EINVAL;
+
+	if (buf[0] != '0') {
+		goodix_core_data->fod_gesture = 1;
 		queue_work(goodix_core_data->gesture_wq,
 			   &goodix_core_data->gesture_work);
 	} else {
-		goodix_core_data->fod_status = 0;
+		goodix_core_data->fod_gesture = 0;
 		queue_work(goodix_core_data->gesture_wq,
 			   &goodix_core_data->gesture_work);
 	}
@@ -896,6 +924,7 @@ static DEVICE_ATTR(aod_enable, 0664, goodix_ts_aod_show, goodix_ts_aod_store);
 static DEVICE_ATTR(switch_report_rate, 0664, goodix_report_rate_show,
 		   goodix_report_rate_store);
 static DEVICE_ATTR(fod_enable, 0664, goodix_ts_fod_show, goodix_ts_fod_store);
+static DEVICE_ATTR(fod_gesture, 0664, goodix_ts_fod_gesture_show, goodix_ts_fod_gesture_store);
 
 static struct attribute *sysfs_attrs[] = {
 	&dev_attr_driver_info.attr, &dev_attr_chip_info.attr,
@@ -904,7 +933,8 @@ static struct attribute *sysfs_attrs[] = {
 	&dev_attr_irq_info.attr,    &dev_attr_esd_info.attr,
 	&dev_attr_debug_log.attr,   &dev_attr_double_tap_enable.attr,
 	&dev_attr_aod_enable.attr,  &dev_attr_switch_report_rate.attr,
-	&dev_attr_fod_enable.attr,  NULL,
+	&dev_attr_fod_enable.attr,  &dev_attr_fod_gesture.attr,
+	NULL,
 };
 
 static const struct attribute_group sysfs_group = {
@@ -2836,10 +2866,10 @@ static void goodix_set_gesture_work(struct work_struct *work)
 		container_of(work, struct goodix_ts_core, gesture_work);
 	ts_debug("double is 0x%x", core_data->double_wakeup);
 	ts_debug("aod is 0x%x", core_data->aod_status);
-	ts_debug("fod is 0x%x", core_data->fod_status);
+	ts_debug("fod is 0x%x", core_data->fod_gesture);
 	ts_debug("enable is 0x%x", core_data->gesture_enabled);
 	if ((core_data->double_wakeup) || (core_data->aod_status) ||
-	    (core_data->fod_status))
+	    (core_data->fod_gesture))
 		core_data->gesture_enabled |= (1 << 0);
 	else
 		core_data->gesture_enabled &= ~(1 << 0);
@@ -2969,8 +2999,6 @@ static int goodix_set_cur_value(int gtp_mode, int gtp_value)
 	    gtp_value >= 0) {
 		goodix_core_data->fod_status = gtp_value;
 		ts_info("Touch_Fod_Enable value [%d]\n", gtp_value);
-		queue_work(goodix_core_data->gesture_wq,
-			   &goodix_core_data->gesture_work);
 		return 0;
 	}
 	if (gtp_mode == Touch_FodIcon_Enable && goodix_core_data &&
@@ -3497,6 +3525,7 @@ static int goodix_ts_probe(struct platform_device *pdev)
 #else
 	core_data->fod_status = 0;
 #endif
+	core_data->fod_gesture = 0;
 	init_completion(&core_data->pm_resume_completion);
 	device_init_wakeup(&pdev->dev, 1);
 	core_data->init_stage = CORE_INIT_STAGE1;
