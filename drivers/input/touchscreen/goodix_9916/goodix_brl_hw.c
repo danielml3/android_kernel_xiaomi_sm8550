@@ -48,6 +48,8 @@ enum brl_request_code {
 	BRL_REQUEST_CODE_CLOCK = 0x04,
 };
 
+static int brld_set_coor_mode(struct goodix_ts_core *cd);
+
 static int brl_select_spi_mode(struct goodix_ts_core *cd)
 {
 	int ret;
@@ -312,6 +314,8 @@ static int brl_reset(struct goodix_ts_core *cd, int delay)
 		usleep_range(delay * 1000, delay * 1000 + 100);
 	else
 		msleep(delay);
+
+	brld_set_coor_mode(cd);
 
 	return brl_select_spi_mode(cd);
 }
@@ -1161,6 +1165,38 @@ static int goodix_touch_handler(struct goodix_ts_core *cd,
 	return 0;
 }
 
+static int brld_set_coor_mode(struct goodix_ts_core *cd) {
+	struct goodix_ts_cmd cmd;
+	int ret;
+
+	if (cd->bus->ic_type != IC_TYPE_BERLIN_D)
+		return 0;
+
+	// Disable rawdata mode
+	cmd.cmd = 0x90;
+	cmd.data[0] = 0;
+	cmd.len = 5;
+	ret = brl_send_cmd(cd, &cmd);
+	if (ret < 0) {
+		ts_err("could not disable rawdata mode, err %d", ret);
+		goto exit;
+	}
+
+	// Enable coor mode
+	cmd.cmd = 0x91;
+	cmd.data[0] = 1;
+	cmd.len = 5;
+	ret = brl_send_cmd(cd, &cmd);
+	if (ret < 0) {
+		ts_err("could not enable coor mode, err: %d", ret);
+		goto exit;
+	}
+
+	ts_info("successfully enabled coor mode");
+exit:
+	return ret;
+}
+
 static int brl_event_handler(struct goodix_ts_core *cd,
 			     struct goodix_ts_event *ts_event)
 {
@@ -1183,6 +1219,7 @@ static int brl_event_handler(struct goodix_ts_core *cd,
 	if (checksum_cmp(pre_buf, IRQ_EVENT_HEAD_LEN, CHECKSUM_MODE_U8_LE)) {
 		ts_err("touch head checksum err");
 		ts_err("touch_head %*ph", IRQ_EVENT_HEAD_LEN, pre_buf);
+		brld_set_coor_mode(cd);
 		ts_event->retry = 1;
 		return -EINVAL;
 	}
