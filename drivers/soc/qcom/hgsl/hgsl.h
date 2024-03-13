@@ -181,8 +181,8 @@ struct hgsl_priv {
 	struct list_head node;
 	struct hgsl_hyp_priv_t hyp_priv;
 	struct mutex lock;
-	struct list_head mem_mapped;
-	struct list_head mem_allocated;
+	struct rb_root mem_mapped;
+	struct rb_root mem_allocated;
 	int open_count;
 
 	atomic64_t total_mem_size;
