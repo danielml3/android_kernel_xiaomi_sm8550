@@ -16,7 +16,7 @@
 #include <linux/completion.h>
 #include <linux/of_irq.h>
 #include <linux/pm_runtime.h>
-#include "mi_disp_notifier.h"
+#include <drm/xiaomi/mi_disp_notifier.h>
 #ifdef CONFIG_OF
 #include <linux/of_gpio.h>
 #include <linux/regulator/consumer.h>
