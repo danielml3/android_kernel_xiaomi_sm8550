@@ -1225,11 +1225,13 @@ static int goodix_parse_dt(struct device_node *node,
 		ts_info("firmware name from dt: %s", name_tmp);
 		strncpy(board_data->fw_name, name_tmp,
 			sizeof(board_data->fw_name));
+		strcat(board_data->fw_name, ".bin");
 	} else {
 		ts_info("can't find firmware name, use default: %s",
 			TS_DEFAULT_FIRMWARE);
 		strncpy(board_data->fw_name, TS_DEFAULT_FIRMWARE,
 			sizeof(board_data->fw_name));
+		strcat(board_data->cfg_bin_name, ".bin");
 	}
 
 	/* get config file name */
@@ -1585,7 +1587,7 @@ static int goodix_ts_power_init(struct goodix_ts_core *core_data)
 			core_data->avdd = NULL;
 			return ret;
 		}
-		ret = regulator_set_voltage(core_data->avdd, 3000000, 3000000);
+		ret = regulator_set_voltage(core_data->avdd, 3200000, 3200000);
 		if (ret < 0) {
 			ts_err("set avdd voltage failed");
 			return ret;
