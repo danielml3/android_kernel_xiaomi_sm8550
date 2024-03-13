@@ -1,0 +1,1 @@
+obj-$(CONFIG_XIAOMI_DISP_NOTIFIER) += mi_disp_notifier.o

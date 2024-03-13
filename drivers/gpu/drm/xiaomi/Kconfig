@@ -1,0 +1,3 @@
+config XIAOMI_DISP_NOTIFIER
+    tristate "Xiaomi DRM notifier"
+    default n

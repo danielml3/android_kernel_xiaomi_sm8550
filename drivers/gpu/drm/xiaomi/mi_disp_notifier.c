@@ -4,7 +4,9 @@
  * Copyright (C) 2020 XiaoMi, Inc.
  */
 
+#include <linux/module.h>
 #include <linux/notifier.h>
+#include <drm/xiaomi/mi_disp_notifier.h>
 
 static BLOCKING_NOTIFIER_HEAD(mi_disp_notifier_list);
 
@@ -46,3 +48,7 @@ int mi_disp_notifier_call_chain(unsigned long val, void *v)
 	return blocking_notifier_call_chain(&mi_disp_notifier_list, val, v);
 }
 EXPORT_SYMBOL(mi_disp_notifier_call_chain);
+
+MODULE_DESCRIPTION("Xiaomi DRM notifier");
+MODULE_AUTHOR("Xiaomi");
+MODULE_LICENSE("GPL v2");

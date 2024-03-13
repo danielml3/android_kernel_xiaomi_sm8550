@@ -379,6 +379,8 @@ source "drivers/gpu/drm/tidss/Kconfig"
 
 source "drivers/gpu/drm/xlnx/Kconfig"
 
+source "drivers/gpu/drm/xiaomi/Kconfig"
+
 source "drivers/gpu/drm/gud/Kconfig"
 
 config DRM_HYPERV
