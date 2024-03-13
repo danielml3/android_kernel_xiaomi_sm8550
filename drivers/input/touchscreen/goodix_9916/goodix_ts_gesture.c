@@ -256,7 +256,7 @@ static int gsx_gesture_ist(struct goodix_ts_core *cd,
 	if ((gesture_data[0] & 0x08) != 0)
 		FP_Event_Gesture = 1;
 #ifdef GOODIX_FOD_AREA_REPORT
-	if (cd->fod_status && (FP_Event_Gesture == 1) &&
+	if (cd->fod_gesture && (FP_Event_Gesture == 1) &&
 	    (gs_event.gesture_type == 0x46) && (cd->nonui_status != 2)) {
 		fodx = gesture_data[8] | (gesture_data[9] << 8);
 		fody = gesture_data[10] | (gesture_data[11] << 8);
