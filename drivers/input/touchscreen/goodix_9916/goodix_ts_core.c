@@ -3019,6 +3019,13 @@ static int goodix_set_cur_value(int gtp_mode, int gtp_value)
 		return 0;
 	}
 
+	if (gtp_mode == THP_FOD_DOWNUP_CTL && goodix_core_data &&
+		gtp_value >= 0) {
+		ts_info("THP_FOD_DOWNUP_CTL value [%d]\n", gtp_value);
+		update_fod_press_status(gtp_value);
+		return 0;
+	}
+
 	if (gtp_mode >= Touch_Mode_NUM) {
 		ts_err("gtp mode is error:%d", gtp_mode);
 		return -EINVAL;

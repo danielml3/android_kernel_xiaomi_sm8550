@@ -78,6 +78,7 @@ enum MODE_TYPE {
 	Touch_Power_Status     		= 19,
 	Touch_Mode_NUM         		= 20,
 	THP_LOCK_SCAN_MODE      	= THP_CMD_BASE + 0,
+	THP_FOD_DOWNUP_CTL      	= THP_CMD_BASE + 1,
 };
 
 struct xiaomi_touch_interface {
