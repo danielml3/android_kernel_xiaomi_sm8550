@@ -265,6 +265,8 @@ static int gsx_gesture_ist(struct goodix_ts_core *cd,
 			 overlay_area);
 		input_report_key(cd->input_dev, BTN_INFO, 1);
 		input_sync(cd->input_dev);
+		input_report_key(cd->input_dev, BTN_INFO, 0);
+		input_sync(cd->input_dev);
 #ifdef TYPE_B_PROTOCOL
 		input_mt_slot(cd->input_dev, 0);
 		input_mt_report_slot_state(cd->input_dev, MT_TOOL_FINGER, 1);
