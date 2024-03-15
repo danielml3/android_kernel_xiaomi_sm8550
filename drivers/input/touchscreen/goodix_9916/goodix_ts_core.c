@@ -1359,7 +1359,7 @@ static void goodix_ts_report_finger(struct input_dev *dev,
 		ts_info("fod finger is %d", goodix_core_data->fod_finger);
 		goto finger_pos;
 	} else if ((goodix_core_data->eventsdata & 0x08) != 0x08 &&
-		   goodix_core_data->fod_finger) {
+		   goodix_core_data->fod_status && goodix_core_data->fod_finger) {
 		ts_info("ts fod up");
 		input_report_key(dev, BTN_INFO, 0);
 		input_report_abs(dev, ABS_MT_WIDTH_MAJOR, 0);
