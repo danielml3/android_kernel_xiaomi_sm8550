@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk.h>
@@ -126,6 +126,12 @@ enum i2c_se_mode {
 	UNINITIALIZED,
 	FIFO_SE_DMA,
 	GSI_ONLY,
+};
+
+enum gsi_error {
+	GENI_I2C_SUCCESS,
+	GENI_I2C_GSI_XFER_OUT,
+	GENI_I2C_ERR_PREP_SG,
 };
 
 struct dbg_buf_ctxt {
@@ -1261,6 +1267,120 @@ geni_i2c_err_unlock_bus:
 	}
 }
 
+/**
+ * geni_i2c_gsi_read() - perform gsi i2c read
+ * @gi2c: Geni I2C device handle
+ * @rx_dev: device handle
+ * @dma_buf: DMA safe buffer address
+ * @msgs: Base address of i2c msgs
+ * @msg_index: message index
+ * @num: Number of messages
+ * @segs: segment number
+ *
+ * Return: 0 for success or error code for failure
+ */
+
+static int geni_i2c_gsi_read(struct geni_i2c_dev *gi2c, struct device *rx_dev,
+			     u8 *dma_buf, struct i2c_msg msgs[], int msg_index,
+			     int num, int segs)
+{
+	struct msm_gpi_tre *rx_t = NULL;
+	int ret = 0;
+	dma_cookie_t rx_cookie;
+
+	I2C_LOG_DBG(gi2c->ipcl, false, gi2c->dev,
+		    "msg[%d].len:%d R\n", msg_index, gi2c->cur->len);
+	sg_init_table(gi2c->rx_sg, 1);
+	ret = geni_se_common_iommu_map_buf(rx_dev, &gi2c->rx_ph,
+					   dma_buf, msgs[msg_index].len,
+					   DMA_FROM_DEVICE);
+	if (ret) {
+		I2C_LOG_ERR(gi2c->ipcl, true, gi2c->dev,
+			    "geni_se_common_iommu_map_buf for rx failed :%d\n",
+			    ret);
+		i2c_put_dma_safe_msg_buf(dma_buf, &msgs[msg_index],
+					 false);
+		gi2c->err = ret;
+		return GENI_I2C_GSI_XFER_OUT;
+
+	} else if (gi2c->dbg_buf_ptr) {
+		gi2c->dbg_buf_ptr[msg_index].virt_buf =
+					(void *)dma_buf;
+		gi2c->dbg_buf_ptr[msg_index].map_buf =
+					(void *)&gi2c->rx_ph;
+	}
+
+	rx_t = setup_rx_tre(gi2c, msgs, msg_index, num);
+	sg_set_buf(gi2c->rx_sg, rx_t,
+		   sizeof(gi2c->rx_t));
+
+	gi2c->rx_desc =
+	geni_i2c_prep_desc(gi2c, gi2c->rx_c, segs, false);
+	if (!gi2c->rx_desc) {
+		gi2c->err = -ENOMEM;
+		return GENI_I2C_ERR_PREP_SG;
+	}
+
+	/* Issue RX */
+	rx_cookie = dmaengine_submit(gi2c->rx_desc);
+	if (dma_submit_error(rx_cookie)) {
+		pr_err("%s: dmaengine_submit failed (%d)\n", __func__, rx_cookie);
+		gi2c->err = -EINVAL;
+		return GENI_I2C_ERR_PREP_SG;
+	}
+
+	dma_async_issue_pending(gi2c->rx_c);
+	return ret;
+}
+
+/**
+ * geni_i2c_gsi_write() - perform gsi i2c write
+ * @gi2c: Geni I2C device handle
+ * @tx_dev: device handle
+ * @dma_buf: DMA safe buffer address
+ * @msgs: Base address of i2c msgs
+ * @msg_index: message index
+ * @num: Number of messages
+ * @sg_index: scatter gather index
+ *
+ * Return: 0 for success or error code for failure
+ */
+static int geni_i2c_gsi_write(struct geni_i2c_dev *gi2c, struct device *tx_dev,
+			      u8 *dma_buf, struct i2c_msg msgs[], int msg_index,
+			      int num, int *sg_index)
+{
+	struct msm_gpi_tre *tx_t = NULL;
+	int ret = 0;
+	int index = *sg_index;
+
+	I2C_LOG_DBG(gi2c->ipcl, false, gi2c->dev,
+		    "msg[%d].len:%d W\n", msg_index, gi2c->cur->len);
+	ret = geni_se_common_iommu_map_buf(tx_dev, &gi2c->tx_ph,
+					   dma_buf, msgs[msg_index].len,
+					   DMA_TO_DEVICE);
+	if (ret) {
+		I2C_LOG_ERR(gi2c->ipcl, true, gi2c->dev,
+			    "geni_se_common_iommu_map_buf for tx failed :%d\n",
+			     ret);
+		i2c_put_dma_safe_msg_buf(dma_buf, &msgs[msg_index],
+					 false);
+		gi2c->err = ret;
+		return GENI_I2C_GSI_XFER_OUT;
+
+	} else if (gi2c->dbg_buf_ptr) {
+		gi2c->dbg_buf_ptr[msg_index].virt_buf =
+					(void *)dma_buf;
+		gi2c->dbg_buf_ptr[msg_index].map_buf =
+					(void *)&gi2c->tx_ph;
+	}
+
+	tx_t = setup_tx_tre(gi2c, msgs, msg_index, num);
+	sg_set_buf(&gi2c->tx_sg[index++], tx_t,
+		   sizeof(gi2c->tx_t));
+	*sg_index = index;
+	return ret;
+}
+
 static int geni_i2c_gsi_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 			     int num)
 {
@@ -1302,10 +1422,8 @@ static int geni_i2c_gsi_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 		int segs = 3 - op;
 		int index = 0;
 		u8 *dma_buf = NULL;
-		dma_cookie_t tx_cookie, rx_cookie;
+		dma_cookie_t tx_cookie;
 		struct msm_gpi_tre *go_t = NULL;
-		struct msm_gpi_tre *rx_t = NULL;
-		struct msm_gpi_tre *tx_t = NULL;
 		struct device *rx_dev = gi2c->wrapper_dev;
 		struct device *tx_dev = gi2c->wrapper_dev;
 		bool tx_chan = true;
@@ -1354,71 +1472,24 @@ static int geni_i2c_gsi_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 						  sizeof(gi2c->go_t));
 
 		if (msgs[i].flags & I2C_M_RD) {
-			I2C_LOG_DBG(gi2c->ipcl, false, gi2c->dev,
-				"msg[%d].len:%d R\n", i, gi2c->cur->len);
-			sg_init_table(gi2c->rx_sg, 1);
-			ret = geni_se_common_iommu_map_buf(rx_dev, &gi2c->rx_ph,
-						dma_buf, msgs[i].len,
-						DMA_FROM_DEVICE);
-			if (ret) {
-				I2C_LOG_ERR(gi2c->ipcl, true, gi2c->dev,
-					    "geni_se_common_iommu_map_buf for rx failed :%d\n",
-					    ret);
-				i2c_put_dma_safe_msg_buf(dma_buf, &msgs[i],
-								false);
+			ret = geni_i2c_gsi_read(gi2c, rx_dev, dma_buf, msgs, i, num, segs);
+
+			if (ret == GENI_I2C_ERR_PREP_SG) {
+				ret = gi2c->err;
+				goto  geni_i2c_err_prep_sg;
+			} else if (ret == GENI_I2C_GSI_XFER_OUT) {
+				ret = gi2c->err;
 				goto geni_i2c_gsi_xfer_out;
-
-			} else if (gi2c->dbg_buf_ptr) {
-				gi2c->dbg_buf_ptr[i].virt_buf =
-							(void *)dma_buf;
-				gi2c->dbg_buf_ptr[i].map_buf =
-							(void *)&gi2c->rx_ph;
 			}
 
-			rx_t = setup_rx_tre(gi2c, msgs, i, num);
-			sg_set_buf(gi2c->rx_sg, rx_t,
-						 sizeof(gi2c->rx_t));
-
-			gi2c->rx_desc =
-			geni_i2c_prep_desc(gi2c, gi2c->rx_c, segs, !tx_chan);
-			if (!gi2c->rx_desc) {
-				gi2c->err = -ENOMEM;
-				goto geni_i2c_err_prep_sg;
-			}
-
-			/* Issue RX */
-			rx_cookie = dmaengine_submit(gi2c->rx_desc);
-			if (dma_submit_error(rx_cookie)) {
-				pr_err("%s: dmaengine_submit failed (%d)\n", __func__, rx_cookie);
-				gi2c->err = -EINVAL;
-				goto geni_i2c_err_prep_sg;
-			}
-
-			dma_async_issue_pending(gi2c->rx_c);
 		} else {
-			I2C_LOG_DBG(gi2c->ipcl, false, gi2c->dev,
-				"msg[%d].len:%d W\n", i, gi2c->cur->len);
-			ret = geni_se_common_iommu_map_buf(tx_dev, &gi2c->tx_ph,
-						dma_buf, msgs[i].len,
-						DMA_TO_DEVICE);
-			if (ret) {
-				I2C_LOG_ERR(gi2c->ipcl, true, gi2c->dev,
-					    "geni_se_common_iommu_map_buf for tx failed :%d\n",
-					    ret);
-				i2c_put_dma_safe_msg_buf(dma_buf, &msgs[i],
-								false);
+
+			ret = geni_i2c_gsi_write(gi2c, tx_dev, dma_buf, msgs, i, num, &index);
+
+			if (ret == GENI_I2C_GSI_XFER_OUT) {
+				ret = gi2c->err;
 				goto geni_i2c_gsi_xfer_out;
-
-			} else if (gi2c->dbg_buf_ptr) {
-				gi2c->dbg_buf_ptr[i].virt_buf =
-							(void *)dma_buf;
-				gi2c->dbg_buf_ptr[i].map_buf =
-							(void *)&gi2c->tx_ph;
 			}
-
-			tx_t = setup_tx_tre(gi2c, msgs, i, num);
-			sg_set_buf(&gi2c->tx_sg[index++], tx_t,
-							  sizeof(gi2c->tx_t));
 		}
 
 		if (gi2c->is_shared && i == num-1) {
