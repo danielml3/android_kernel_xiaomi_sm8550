@@ -855,10 +855,19 @@ static int qusb_phy_dpdm_regulator_enable(struct regulator_dev *rdev)
 	dev_dbg(qphy->phy.dev, "%s dpdm_enable:%d\n",
 				__func__, qphy->dpdm_enable);
 
+	/* Turn on the clocks to avoid unclocked access while reading EUD_EN reg*/
+	qusb_phy_enable_clocks(qphy, true);
 	if (qphy->eud_enable_reg && readl_relaxed(qphy->eud_enable_reg)) {
 		dev_err(qphy->phy.dev, "eud is enabled\n");
-		return 0;
+		/*
+		 * Dont turn off the clocks since EUD is enabled, and return -EPERM
+		 * since we dont want chargerfw to go ahead with its APSD operation
+		 */
+		return -EPERM;
 	}
+
+	if (!qphy->cable_connected)
+		qusb_phy_enable_clocks(qphy, false);
 
 	mutex_lock(&qphy->phy_lock);
 	if (!qphy->dpdm_enable) {
