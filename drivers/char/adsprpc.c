@@ -6347,8 +6347,9 @@ static int get_unique_hlos_process_id(void)
 {
 	int tgid_frpc = -1, tgid_index = 1;
 	struct fastrpc_apps *me = &gfa;
+	unsigned long irq_flags = 0;
 
-	spin_lock(&me->hlock);
+	spin_lock_irqsave(&me->hlock, irq_flags);
 	for (tgid_index = 1; tgid_index < MAX_FRPC_TGID; tgid_index++) {
 		if (!frpc_tgid_usage_array[tgid_index]) {
 			tgid_frpc = tgid_index;
@@ -6357,7 +6358,7 @@ static int get_unique_hlos_process_id(void)
 			break;
 		}
 	}
-	spin_unlock(&me->hlock);
+	spin_unlock_irqrestore(&me->hlock, irq_flags);
 	return tgid_frpc;
 }
 
