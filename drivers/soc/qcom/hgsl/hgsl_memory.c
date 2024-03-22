@@ -439,13 +439,9 @@ int hgsl_mem_cache_op(struct device *dev, struct hgsl_mem_node *mem_node,
 		return -EINVAL;
 
 	cache_mode = mem_node->flags & GSL_MEMFLAGS_CACHEMODE_MASK;
-	switch (cache_mode) {
-	case GSL_MEMFLAGS_WRITETHROUGH:
-	case GSL_MEMFLAGS_WRITEBACK:
-		break;
-	default:
+	if (cache_mode != GSL_MEMFLAGS_WRITETHROUGH &&
+		cache_mode != GSL_MEMFLAGS_WRITEBACK)
 		return 0;
-	}
 
 	if (sizebytes == 0 || sizebytes > UINT_MAX || offsetbytes > UINT_MAX)
 		return -ERANGE;

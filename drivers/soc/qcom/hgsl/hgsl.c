@@ -3786,116 +3786,85 @@ static int hgsl_ioctl_timeline_wait(struct file *filep,
 	return ret;
 }
 
+static const struct hgsl_ioctl hgsl_ioctl_func_table[] = {
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_ISSUE_IB,
+			hgsl_ioctl_issueib),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_CTXT_CREATE,
+			hgsl_ioctl_ctxt_create),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_CTXT_DESTROY,
+			hgsl_ioctl_ctxt_destroy),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_WAIT_TIMESTAMP,
+			hgsl_ioctl_wait_timestamp),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_READ_TIMESTAMP,
+			hgsl_ioctl_read_timestamp),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_CHECK_TIMESTAMP,
+			hgsl_ioctl_check_timestamp),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_HYP_GENERIC_TRANSACTION,
+			hgsl_ioctl_hyp_generic_transaction),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_GET_SHADOWTS_MEM,
+			hgsl_ioctl_get_shadowts_mem),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_PUT_SHADOWTS_MEM,
+			hgsl_ioctl_put_shadowts_mem),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_MEM_ALLOC,
+			hgsl_ioctl_mem_alloc),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_MEM_FREE,
+			hgsl_ioctl_mem_free),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_MEM_MAP_SMMU,
+			hgsl_ioctl_mem_map_smmu),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_MEM_UNMAP_SMMU,
+			hgsl_ioctl_mem_unmap_smmu),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_MEM_CACHE_OPERATION,
+			hgsl_ioctl_mem_cache_operation),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_MEM_GET_FD,
+			hgsl_ioctl_mem_get_fd),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_ISSUIB_WITH_ALLOC_LIST,
+			hgsl_ioctl_issueib_with_alloc_list),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_GET_SYSTEM_TIME,
+			hgsl_ioctl_get_system_time),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_SYNCOBJ_WAIT_MULTIPLE,
+			hgsl_ioctl_syncobj_wait_multiple),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_PERFCOUNTER_SELECT,
+			hgsl_ioctl_perfcounter_select),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_PERFCOUNTER_DESELECT,
+			hgsl_ioctl_perfcounter_deselect),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_PERFCOUNTER_QUERY_SELECTION,
+			hgsl_ioctl_perfcounter_query_selection),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_PERFCOUNTER_READ,
+			hgsl_ioctl_perfcounter_read),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_SET_METAINFO,
+			hgsl_ioctl_set_metainfo),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_HSYNC_FENCE_CREATE,
+			hgsl_ioctl_hsync_fence_create),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_ISYNC_TIMELINE_CREATE,
+			hgsl_ioctl_isync_timeline_create),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_ISYNC_TIMELINE_DESTROY,
+			hgsl_ioctl_isync_timeline_destroy),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_ISYNC_FENCE_CREATE,
+			hgsl_ioctl_isync_fence_create),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_ISYNC_FENCE_SIGNAL,
+			hgsl_ioctl_isync_fence_signal),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_ISYNC_FORWARD,
+			hgsl_ioctl_isync_forward),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_TIMELINE_CREATE,
+			hgsl_ioctl_timeline_create),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_TIMELINE_SIGNAL,
+			hgsl_ioctl_timeline_signal),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_TIMELINE_QUERY,
+			hgsl_ioctl_timeline_query),
+	HGSL_IOCTL_FUNC(HGSL_IOCTL_TIMELINE_WAIT,
+			hgsl_ioctl_timeline_wait),
+};
+
 static long hgsl_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 {
-	int ret;
+	const struct hgsl_ioctl *ioctls = hgsl_ioctl_func_table;
+	int size = ARRAY_SIZE(hgsl_ioctl_func_table);
+	unsigned int nr = _IOC_NR(cmd);
 
-	switch (cmd) {
-	case HGSL_IOCTL_ISSUE_IB:
-		ret = hgsl_ioctl_issueib(filep, arg);
-		break;
-	case HGSL_IOCTL_CTXT_CREATE:
-		ret = hgsl_ioctl_ctxt_create(filep, arg);
-		break;
-	case HGSL_IOCTL_CTXT_DESTROY:
-		ret = hgsl_ioctl_ctxt_destroy(filep, arg);
-		break;
-	case HGSL_IOCTL_WAIT_TIMESTAMP:
-		ret = hgsl_ioctl_wait_timestamp(filep, arg);
-		break;
-	case HGSL_IOCTL_READ_TIMESTAMP:
-		ret = hgsl_ioctl_read_timestamp(filep, arg);
-		break;
-	case HGSL_IOCTL_CHECK_TIMESTAMP:
-		ret = hgsl_ioctl_check_timestamp(filep, arg);
-		break;
-	case HGSL_IOCTL_HYP_GENERIC_TRANSACTION:
-		ret = hgsl_ioctl_hyp_generic_transaction(filep, arg);
-		break;
-	case HGSL_IOCTL_GET_SHADOWTS_MEM:
-		ret = hgsl_ioctl_get_shadowts_mem(filep, arg);
-		break;
-	case HGSL_IOCTL_PUT_SHADOWTS_MEM:
-		ret = hgsl_ioctl_put_shadowts_mem(filep, arg);
-		break;
-	case HGSL_IOCTL_MEM_ALLOC:
-		ret = hgsl_ioctl_mem_alloc(filep, arg);
-		break;
-	case HGSL_IOCTL_MEM_FREE:
-		ret = hgsl_ioctl_mem_free(filep, arg);
-		break;
-	case HGSL_IOCTL_MEM_MAP_SMMU:
-		ret = hgsl_ioctl_mem_map_smmu(filep, arg);
-		break;
-	case HGSL_IOCTL_MEM_UNMAP_SMMU:
-		ret = hgsl_ioctl_mem_unmap_smmu(filep, arg);
-		break;
-	case HGSL_IOCTL_MEM_CACHE_OPERATION:
-		ret = hgsl_ioctl_mem_cache_operation(filep, arg);
-		break;
-	case HGSL_IOCTL_MEM_GET_FD:
-		ret = hgsl_ioctl_mem_get_fd(filep, arg);
-		break;
-	case HGSL_IOCTL_ISSUIB_WITH_ALLOC_LIST:
-		ret = hgsl_ioctl_issueib_with_alloc_list(filep, arg);
-		break;
-	case HGSL_IOCTL_GET_SYSTEM_TIME:
-		ret = hgsl_ioctl_get_system_time(filep, arg);
-		break;
-	case HGSL_IOCTL_SYNCOBJ_WAIT_MULTIPLE:
-		ret = hgsl_ioctl_syncobj_wait_multiple(filep, arg);
-		break;
-	case HGSL_IOCTL_PERFCOUNTER_SELECT:
-		ret = hgsl_ioctl_perfcounter_select(filep, arg);
-		break;
-	case HGSL_IOCTL_PERFCOUNTER_DESELECT:
-		ret = hgsl_ioctl_perfcounter_deselect(filep, arg);
-		break;
-	case HGSL_IOCTL_PERFCOUNTER_QUERY_SELECTION:
-		ret = hgsl_ioctl_perfcounter_query_selection(filep, arg);
-		break;
-	case HGSL_IOCTL_PERFCOUNTER_READ:
-		ret = hgsl_ioctl_perfcounter_read(filep, arg);
-		break;
-	case HGSL_IOCTL_SET_METAINFO:
-		ret = hgsl_ioctl_set_metainfo(filep, arg);
-		break;
-	case HGSL_IOCTL_HSYNC_FENCE_CREATE:
-		ret = hgsl_ioctl_hsync_fence_create(filep, arg);
-		break;
-	case HGSL_IOCTL_ISYNC_TIMELINE_CREATE:
-		ret = hgsl_ioctl_isync_timeline_create(filep, arg);
-		break;
-	case HGSL_IOCTL_ISYNC_TIMELINE_DESTROY:
-		ret = hgsl_ioctl_isync_timeline_destroy(filep, arg);
-		break;
-	case HGSL_IOCTL_ISYNC_FENCE_CREATE:
-		ret = hgsl_ioctl_isync_fence_create(filep, arg);
-		break;
-	case HGSL_IOCTL_ISYNC_FENCE_SIGNAL:
-		ret = hgsl_ioctl_isync_fence_signal(filep, arg);
-		break;
-	case HGSL_IOCTL_ISYNC_FORWARD:
-		ret = hgsl_ioctl_isync_forward(filep, arg);
-		break;
-	case HGSL_IOCTL_TIMELINE_CREATE:
-		ret = hgsl_ioctl_timeline_create(filep, arg);
-		break;
-	case HGSL_IOCTL_TIMELINE_SIGNAL:
-		ret = hgsl_ioctl_timeline_signal(filep, arg);
-		break;
-	case HGSL_IOCTL_TIMELINE_QUERY:
-		ret = hgsl_ioctl_timeline_query(filep, arg);
-		break;
-	case HGSL_IOCTL_TIMELINE_WAIT:
-		ret = hgsl_ioctl_timeline_wait(filep, arg);
-		break;
+	if (nr >= size || ioctls[nr].func == NULL)
+		return -ENOIOCTLCMD;
 
-	default:
-		ret = -ENOIOCTLCMD;
-	}
-
-	return ret;
+	return ioctls[nr].func(filep, arg);
 }
 
 static long hgsl_compat_ioctl(struct file *filep, unsigned int cmd,

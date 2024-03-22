@@ -27,8 +27,17 @@
 
 #define HGSL_CONTEXT_NUM 256
 
+#define HGSL_IOCTL_FUNC(_cmd, _func) \
+	[_IOC_NR((_cmd))] = \
+		{ .cmd = (_cmd), .func = (_func) }
+
 struct qcom_hgsl;
 struct hgsl_hsync_timeline;
+
+struct hgsl_ioctl {
+	unsigned int cmd;
+	int (*func)(struct file *filep, unsigned long arg);
+};
 
 #pragma pack(push, 4)
 struct shadow_ts {
