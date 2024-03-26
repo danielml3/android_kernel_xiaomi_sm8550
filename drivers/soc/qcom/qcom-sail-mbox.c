@@ -392,6 +392,7 @@ static int populate_irq_from_dt(struct platform_device *pdev, struct sail_mailbo
 	int ret;
 	int count = 0;
 	const char *intr_name = "sailmb_irq";
+	const size_t irq_name_size = strlen(intr_name) + 1;
 
 	sailmb_dev->irq_count = of_property_count_elems_of_size(pdev->dev.of_node,
 		"interrupts", (3 * sizeof(u32)));
@@ -424,9 +425,8 @@ static int populate_irq_from_dt(struct platform_device *pdev, struct sail_mailbo
 
 		sailmb_dev->irq_data[count].irq = platform_get_irq(pdev, count);
 		sailmb_dev->irq_data[count].irq_name =
-				devm_kzalloc(&pdev->dev, strlen(intr_name)+1, GFP_KERNEL);
-		strscpy(sailmb_dev->irq_data[count].irq_name, intr_name,
-			strlen(sailmb_dev->irq_data[count].irq_name));
+				devm_kzalloc(&pdev->dev, irq_name_size, GFP_KERNEL);
+		strscpy(sailmb_dev->irq_data[count].irq_name, intr_name, irq_name_size);
 
 		dev_dbg(sailmb_dev->dev, "requesting irq %d\n", sailmb_dev->irq_data[count].irq);
 		ret = devm_request_irq(&pdev->dev, sailmb_dev->irq_data[count].irq,
