@@ -5898,8 +5898,16 @@ int msm_pcie_enumerate(u32 rc_idx)
 	pci_save_state(pcidev);
 	dev->default_state = pci_store_saved_state(pcidev);
 
-	if (dev->boot_option & MSM_PCIE_NO_PROBE_ENUMERATION)
-		dev_pm_syscore_device(&pcidev->dev, true);
+	/*
+	 * If PCIe switch is present, don't register root-port
+	 * as a syscore device.
+	 */
+	if (!(dev->i2c_ctrl.client)) {
+		PCIE_ERR(dev, "PCIe: RC%d: Did not find PCIe switch.\n",
+			dev->rc_idx);
+		if (dev->boot_option & MSM_PCIE_NO_PROBE_ENUMERATION)
+			dev_pm_syscore_device(&pcidev->dev, true);
+	}
 out:
 	mutex_unlock(&dev->enumerate_lock);
 
