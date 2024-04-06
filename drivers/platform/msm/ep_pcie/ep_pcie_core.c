@@ -1244,7 +1244,6 @@ static void ep_pcie_config_inbound_iatu(struct ep_pcie_dev_t *dev, bool is_vf)
 
 	if (dev->phy_rev >= 6) {
 		ep_pcie_write_reg(dev->iatu, PCIE20_IATU_I_CTRL1(is_vf), 0x0);
-		ep_pcie_write_reg(dev->iatu, PCIE20_IATU_I_LTAR(is_vf), vf_lower);
 		ep_pcie_write_reg(dev->iatu, PCIE20_IATU_I_UTAR(is_vf), 0x0);
 
 		/*
@@ -1253,9 +1252,11 @@ static void ep_pcie_config_inbound_iatu(struct ep_pcie_dev_t *dev, bool is_vf)
 		 * to be matched with a single ATU region.
 		 */
 		if (is_vf) {
+			ep_pcie_write_reg(dev->iatu, PCIE20_IATU_I_LTAR(is_vf), vf_lower);
 			ep_pcie_write_reg(dev->iatu, PCIE20_IATU_I_CTRL2(is_vf),
 						BIT(31) | BIT(26));
 		} else {
+			ep_pcie_write_reg(dev->iatu, PCIE20_IATU_I_LTAR(is_vf), lower);
 			ep_pcie_write_reg(dev->iatu, PCIE20_IATU_I_CTRL2(is_vf),
 						BIT(31) | BIT(30) | BIT(19));
 		}
