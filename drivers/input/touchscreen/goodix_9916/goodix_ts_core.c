@@ -284,6 +284,16 @@ struct kobject *goodix_get_default_kobj(void)
 	return kobj;
 }
 
+/*
+ * Syncs the high report rate status
+ * Only gets enabled if FOD report is disabled and high report rate is enabled
+ * This must be called after updating the report_rate value or fod_status
+ */
+static void goodix_sync_report_rate(void) {
+	struct goodix_ts_core *cd = goodix_core_data;
+	cd->hw_ops->switch_report_rate(cd, cd->report_rate == 480 && !cd->fod_status);
+}
+
 /* show driver infomation */
 static ssize_t goodix_ts_driver_info_show(struct device *dev,
 					  struct device_attribute *attr,
@@ -840,6 +850,8 @@ static ssize_t goodix_ts_fod_store(struct device *dev,
 	} else {
 		goodix_core_data->fod_status = 0;
 	}
+
+	goodix_sync_report_rate();
 	return count;
 }
 
@@ -892,18 +904,16 @@ static ssize_t goodix_report_rate_store(struct device *dev,
 					struct device_attribute *attr,
 					const char *buf, size_t count)
 {
-	struct goodix_ts_core *core_data = dev_get_drvdata(dev);
-
 	if (!buf || count <= 0)
 		return -EINVAL;
 
 	if (buf[0] != '0') {
 		goodix_core_data->report_rate = 480;
-		core_data->hw_ops->switch_report_rate(core_data, true);
 	} else {
 		goodix_core_data->report_rate = 240;
-		core_data->hw_ops->switch_report_rate(core_data, false);
 	}
+
+	goodix_sync_report_rate();
 	return count;
 }
 static DEVICE_ATTR(driver_info, 0444, goodix_ts_driver_info_show, NULL);
@@ -2238,6 +2248,8 @@ out:
 	//
 	/* update ic_info */
 	hw_ops->get_ic_info(core_data, &core_data->ic_info);
+	/* sync report rate */
+	goodix_sync_report_rate();
 	//
 	ts_info("Resume end");
 	return 0;
@@ -2998,6 +3010,7 @@ static int goodix_set_cur_value(int gtp_mode, int gtp_value)
 	if (gtp_mode == Touch_Fod_Enable && goodix_core_data &&
 	    gtp_value >= 0) {
 		goodix_core_data->fod_status = gtp_value;
+		goodix_sync_report_rate();
 		ts_info("Touch_Fod_Enable value [%d]\n", gtp_value);
 		return 0;
 	}
@@ -3535,6 +3548,8 @@ static int goodix_ts_probe(struct platform_device *pdev)
 	core_data->report_rate = 240;
 	goodix_modules.core_data = core_data;
 	core_module_prob_sate = CORE_MODULE_PROB_SUCCESS;
+
+	goodix_sync_report_rate();
 
 	ts_info("goodix_ts_core probe success");
 	return 0;
