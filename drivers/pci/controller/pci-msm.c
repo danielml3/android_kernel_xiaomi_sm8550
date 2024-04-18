@@ -912,7 +912,6 @@ struct pcie_i2c_reg_update {
 	u32 val;
 };
 
-
 /* i2c control interface for a i2c client device */
 struct pcie_i2c_ctrl {
 	struct i2c_client *client;
@@ -8059,6 +8058,96 @@ invalid_link_width:
 
 	return -EINVAL;
 }
+
+int msm_pcie_retrain_port_link(struct pci_dev *ep_dev, u16 target_link_speed)
+{
+
+	int current_link_speed = 0;
+	bool link_trained = false;
+	int link_check_count = 0;
+	u32 max_link_speed = 0;
+	u16 link_status = 0;
+	u32 lnkcap = 0;
+	int ret = 0;
+
+	struct pci_dev *port_dev;
+	struct msm_pcie_dev_t *pcie_dev = PCIE_BUS_PRIV_DATA(ep_dev->bus);
+
+	port_dev = ep_dev->bus->self;
+	PCIE_DBG(pcie_dev, "Calling API to retrain Bus:0x%x DF:0x%x to Gen%d\n",
+			port_dev->bus->number, port_dev->devfn, target_link_speed);
+
+	pci_read_config_dword(port_dev, port_dev->pcie_cap + PCI_EXP_LNKCAP,
+			&lnkcap);
+
+	max_link_speed = lnkcap & PCI_EXP_LNKCAP_SLS;
+	PCIE_DBG(pcie_dev, "Max supported link speed by port is: %d\n", max_link_speed);
+
+	if (target_link_speed > max_link_speed) {
+		PCIE_DBG(pcie_dev, "Target link_speed is more than supported speed: %d\n",
+				max_link_speed);
+		return MSM_PCIE_ERROR;
+	}
+
+	msm_pcie_config_clear_set_dword(ep_dev,
+					ep_dev->pcie_cap +
+					PCI_EXP_LNKCTL2,
+					PCI_EXP_LNKCTL2_TLS,
+					target_link_speed);
+
+	msm_pcie_config_clear_set_dword(port_dev,
+					port_dev->pcie_cap +
+					PCI_EXP_LNKCTL2,
+					PCI_EXP_LNKCTL2_TLS,
+					target_link_speed);
+
+	/*re-train-link*/
+	msm_pcie_config_clear_set_dword(port_dev,
+					port_dev->pcie_cap + PCI_EXP_LNKCTL,
+					0, PCI_EXP_LNKCTL_RL);
+
+	PCIE_DBG(pcie_dev,
+		"PCIe: RC%d: DSP<->EP Link is retraining\n",
+		pcie_dev->rc_idx);
+
+		/* Wait for up to 100ms for the link to come up */
+		do {
+			usleep_range(LINK_UP_TIMEOUT_US_MIN,
+				     LINK_UP_TIMEOUT_US_MAX);
+			pci_read_config_word(port_dev,
+					     port_dev->pcie_cap + PCI_EXP_LNKSTA,
+					     &link_status);
+			if (lnkcap & PCI_EXP_LNKCAP_DLLLARC)
+				link_trained = (!(link_status &
+						  PCI_EXP_LNKSTA_LT)) &&
+						(link_status &
+						 PCI_EXP_LNKSTA_DLLLA);
+			else
+				link_trained = !(link_status &
+						 PCI_EXP_LNKSTA_LT);
+
+			if (link_trained)
+				break;
+		} while (link_check_count++ < LINK_CHECK_COUNT_MAX);
+
+		if (link_trained) {
+			PCIE_DBG(pcie_dev,
+				"PCIe: RC%d: DSP<->EP link status: 0x%04x\n",
+				pcie_dev->rc_idx, link_status);
+			PCIE_DBG(pcie_dev,
+				"PCIe: RC%d: DSP<->EP Link is up after %d checkings\n",
+				pcie_dev->rc_idx, link_check_count);
+			current_link_speed = link_status & PCI_EXP_LNKSTA_CLS;
+			PCIE_DBG(pcie_dev, "DSP<->EP link speed is: Gen%d\n", current_link_speed);
+		} else {
+			PCIE_DBG(pcie_dev, "DSP<->EP link initialization failed\n");
+			ret = MSM_PCIE_ERROR;
+		}
+
+	return 0;
+
+}
+EXPORT_SYMBOL_GPL(msm_pcie_retrain_port_link);
 
 int msm_pcie_dsp_link_control(struct pci_dev *pci_dev,
 			      bool link_enable)
