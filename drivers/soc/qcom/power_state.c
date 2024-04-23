@@ -107,6 +107,7 @@ struct power_state_drvdata {
 	struct kobject *ps_kobj;
 	struct kobj_attribute ps_ka;
 	struct kobj_attribute ds_ka;
+	struct kobj_attribute ds_allow_ka;
 	struct wakeup_source *ps_ws;
 	struct notifier_block ps_pm_nb;
 	struct qmp *qmp;
@@ -116,6 +117,7 @@ struct power_state_drvdata {
 	int subsys_count;
 	struct list_head sub_sys_list;
 	int deep_sleep_cnt;
+	int deep_sleep_allowed;
 };
 
 static struct power_state_drvdata *drv;
@@ -479,6 +481,32 @@ static int power_state_suspend(void)
 	return 0;
 }
 
+static ssize_t deep_sleep_allowed_show(struct kobject *kobj, struct kobj_attribute *attr,
+				       char *buf)
+{
+	struct power_state_drvdata *drv = container_of(attr, struct power_state_drvdata, ds_ka);
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", drv->deep_sleep_allowed);
+}
+
+static ssize_t deep_sleep_allowed_store(struct kobject *kobj, struct kobj_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct power_state_drvdata *drv = container_of(attr, struct power_state_drvdata, ds_ka);
+	int val;
+	int ret;
+
+	ret = kstrtoint(buf, 10, &val);
+	if (ret) {
+		pr_err("Invalid argument passed\n");
+		return ret;
+	}
+
+	drv->deep_sleep_allowed = val;
+
+	return count;
+}
+
 static ssize_t deep_sleep_cnt_show(struct kobject *kobj, struct kobj_attribute *attr,
 				       char *buf)
 {
@@ -573,6 +601,19 @@ static int power_state_dev_init(struct power_state_drvdata *drv)
 	ret = sysfs_create_file(drv->ps_kobj, &drv->ds_ka.attr);
 	if (ret) {
 		sysfs_remove_file(drv->ps_kobj, &drv->ps_ka.attr);
+		goto exit;
+	}
+
+	sysfs_attr_init(&drv->ds_allow_ka.attr);
+	drv->ds_allow_ka.attr.mode = 0644;
+	drv->ds_allow_ka.attr.name = "deep_sleep_allowed";
+	drv->ds_allow_ka.show = deep_sleep_allowed_show;
+	drv->ds_allow_ka.store = deep_sleep_allowed_store;
+
+	ret = sysfs_create_file(drv->ps_kobj, &drv->ds_allow_ka.attr);
+	if (ret) {
+		sysfs_remove_file(drv->ps_kobj, &drv->ps_ka.attr);
+		sysfs_remove_file(drv->ps_kobj, &drv->ds_ka.attr);
 		goto exit;
 	}
 
