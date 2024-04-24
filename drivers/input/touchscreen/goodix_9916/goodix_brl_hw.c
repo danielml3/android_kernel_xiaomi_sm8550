@@ -318,6 +318,8 @@ static int brl_dev_confirm(struct goodix_ts_core *cd)
 		ts_err("device confirm failed, rx_buf:%*ph", 8, rx_buf);
 	}
 
+	cd->pending_init_coor_mode = true;
+
 	return ret;
 }
 
@@ -1190,6 +1192,8 @@ static int goodix_touch_handler(struct goodix_ts_core *cd,
 	if (fod_area_pressed)
 		cd->eventsdata |= 0x08;
 
+	cd->pending_init_coor_mode = false;
+
 	return 0;
 }
 
@@ -1286,10 +1290,12 @@ static int brl_event_handler(struct goodix_ts_core *cd,
 		return ret;
 	}
 
+	if (cd->pending_init_coor_mode)
+		brld_set_coor_mode(cd);
+
 	if (checksum_cmp(pre_buf, IRQ_EVENT_HEAD_LEN, CHECKSUM_MODE_U8_LE)) {
 		ts_err("touch head checksum err");
 		ts_err("touch_head %*ph", IRQ_EVENT_HEAD_LEN, pre_buf);
-		brld_set_coor_mode(cd);
 		ts_event->retry = 1;
 		return -EINVAL;
 	}
