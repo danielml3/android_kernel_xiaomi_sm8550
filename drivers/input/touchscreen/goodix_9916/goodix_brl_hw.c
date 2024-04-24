@@ -1195,10 +1195,17 @@ static int goodix_touch_handler(struct goodix_ts_core *cd,
 
 static int brld_set_coor_mode(struct goodix_ts_core *cd) {
 	struct goodix_ts_cmd cmd;
+	int flag_addr = cd->ic_info.misc.touch_data_addr;
+	int retry = 20;
 	int ret;
+	u8 val;
 
 	if (cd->bus->ic_type != IC_TYPE_BERLIN_D)
 		return 0;
+
+	// Disable IRQ & ESD
+	brl_irq_enbale(cd, false);
+	goodix_ts_blocking_notify(NOTIFY_ESD_OFF, NULL);
 
 	// Disable rawdata mode
 	cmd.cmd = 0x90;
@@ -1220,8 +1227,43 @@ static int brld_set_coor_mode(struct goodix_ts_core *cd) {
 		goto exit;
 	}
 
+	// Clear touch event flag
+	val = 0;
+	ret = brl_write(cd, flag_addr, &val, 1);
+	if (ret < 0) {
+		ts_err("failed to clear touch event flag");
+		goto exit;
+	}
+
+	// Wait for touch event
+	while (retry--) {
+		usleep_range(5000, 5100);
+		ret = brl_read(cd, flag_addr, &val, 1);
+		if (!ret && (val & GOODIX_TOUCH_EVENT)) {
+			ts_debug("found GOODIX_TOUCH_EVENT, %d retries remaining", retry);
+			break;
+		}
+	}
+
+	if (!retry) {
+		ts_err("touch data is not ready");
+		goto exit;
+	}
+
+	// Clear touch event flag
+	val = 0;
+	ret = brl_write(cd, flag_addr, &val, 1);
+	if (ret < 0) {
+		ts_err("failed to clear touch event flag");
+		goto exit;
+	}
+
 	ts_info("successfully enabled coor mode");
 exit:
+	// Enable IRQ & ESD
+	brl_irq_enbale(cd, true);
+	goodix_ts_blocking_notify(NOTIFY_ESD_ON, NULL);
+
 	return ret;
 }
 
