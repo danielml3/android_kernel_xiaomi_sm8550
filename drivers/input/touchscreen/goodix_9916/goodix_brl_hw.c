@@ -1204,7 +1204,7 @@ static int brld_set_coor_mode(struct goodix_ts_core *cd) {
 	int ret;
 	u8 val;
 
-	if (cd->bus->ic_type != IC_TYPE_BERLIN_D)
+	if (cd->bus->ic_type != IC_TYPE_BERLIN_D || atomic_read(&cd->suspended) == 1)
 		return 0;
 
 	// Disable IRQ & ESD
