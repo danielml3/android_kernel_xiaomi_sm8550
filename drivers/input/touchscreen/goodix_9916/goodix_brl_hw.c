@@ -48,6 +48,24 @@ enum brl_request_code {
 	BRL_REQUEST_CODE_CLOCK = 0x04,
 };
 
+#if IS_ENABLED(CONFIG_TARGET_PRODUCT_SOCRATES)
+#define GOODIX_FOD_COOR_CHECK
+#define GOODIX_FOD_AREA_CENTER_X 7200
+#define GOODIX_FOD_AREA_CENTER_Y 28850
+#define GOODIX_FOD_AREA_RADIUS 1300
+#endif
+
+#ifdef GOODIX_FOD_COOR_CHECK
+static inline int goodix_is_fod_area_pressed(int report_x, int report_y) {
+	int radius_squared = GOODIX_FOD_AREA_RADIUS * GOODIX_FOD_AREA_RADIUS;
+	int x_diff = report_x - GOODIX_FOD_AREA_CENTER_X;
+	int y_diff = report_y - GOODIX_FOD_AREA_CENTER_Y;
+	int distance_squared = x_diff * x_diff + y_diff * y_diff;
+
+	return distance_squared <= radius_squared;
+}
+#endif
+
 static int brld_set_coor_mode(struct goodix_ts_core *cd);
 
 static int brl_select_spi_mode(struct goodix_ts_core *cd)
@@ -999,6 +1017,7 @@ static int brl_esd_check(struct goodix_ts_core *cd)
 #define POINT_TYPE_STYLUS 0x03
 #define GOODIX_LRAGETOUCH_EVENT 0x10
 static u8 eve_type;
+static u8 fod_area_pressed;
 
 static void goodix_parse_finger(struct goodix_touch_data *touch_data, u8 *buf,
 				int touch_num)
@@ -1008,6 +1027,7 @@ static void goodix_parse_finger(struct goodix_touch_data *touch_data, u8 *buf,
 	int i;
 
 	coor_data = &buf[IRQ_EVENT_HEAD_LEN];
+	fod_area_pressed = false;
 
 	if (eve_type == 0x88) {
 		touch_data->overlay = coor_data[touch_num * 8 + 2];
@@ -1031,6 +1051,11 @@ static void goodix_parse_finger(struct goodix_touch_data *touch_data, u8 *buf,
 		touch_data->coords[id].y = y;
 		touch_data->coords[id].w = w;
 		coor_data += BYTES_PER_POINT;
+
+#ifdef GOODIX_FOD_COOR_CHECK
+		if (!fod_area_pressed && goodix_is_fod_area_pressed(x, y))
+			fod_area_pressed = true;
+#endif
 	}
 	touch_data->touch_num = touch_num;
 }
@@ -1165,6 +1190,9 @@ static int goodix_touch_handler(struct goodix_ts_core *cd,
 		ts_debug("TODO add custom info process function");
 
 	cd->pending_init_coor_mode = false;
+
+	if (fod_area_pressed)
+		cd->eventsdata |= 0x08;
 
 	return 0;
 }
