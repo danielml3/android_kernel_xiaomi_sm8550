@@ -49,6 +49,7 @@ enum brl_request_code {
 };
 
 static int brld_set_coor_mode(struct goodix_ts_core *cd);
+static int brl_switch_report_rate(struct goodix_ts_core *cd, bool on);
 
 static int brl_select_spi_mode(struct goodix_ts_core *cd)
 {
@@ -1202,6 +1203,9 @@ static int brld_set_coor_mode(struct goodix_ts_core *cd) {
 		ts_err("could not enable coor mode, err: %d", ret);
 		goto exit;
 	}
+
+	// Sync touch report rate
+	brl_switch_report_rate(cd, cd->report_rate == 480);
 
 	// Clear touch event flag
 	val = 0;
