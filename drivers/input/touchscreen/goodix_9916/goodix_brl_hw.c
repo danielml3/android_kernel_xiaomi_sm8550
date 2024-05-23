@@ -374,6 +374,44 @@ static int brl_write(struct goodix_ts_core *cd, unsigned int addr,
 	return bus->write(bus->dev, addr, data, len);
 }
 
+#define GOODIX_TOUCH_EVENT 0x80
+static int brl_wait_for_touch_data(struct goodix_ts_core *cd) {
+	int flag_addr = cd->ic_info.misc.touch_data_addr;
+	int retry = 20;
+	int ret;
+	u8 val;
+
+	// Clear touch event flag
+	val = 0;
+	ret = brl_write(cd, flag_addr, &val, 1);
+	if (ret < 0) {
+		ts_err("failed to clear touch event flag");
+	}
+
+	// Wait for touch data
+	while (retry--) {
+		usleep_range(5000, 5100);
+		ret = brl_read(cd, flag_addr, &val, 1);
+        if (!ret && (val & GOODIX_TOUCH_EVENT)) {
+			ts_debug("found GOODIX_TOUCH_EVENT, %d retries remaining", retry);
+			break;
+		}
+	}
+
+	if (retry) {
+		// Clear touch event flag
+		val = 0;
+		ret = brl_write(cd, flag_addr, &val, 1);
+		if (ret < 0) {
+			ts_err("failed to clear touch event flag");
+		}
+	} else {
+		ts_err("touch data is not ready");
+	}
+
+	return retry;
+}
+
 /* command ack info */
 #define CMD_ACK_IDLE 0x01
 #define CMD_ACK_BUSY 0x02
@@ -1010,7 +1048,6 @@ static int brl_esd_check(struct goodix_ts_core *cd)
 #define BYTES_PER_POINT 8
 #define COOR_DATA_CHECKSUM_SIZE 2
 
-#define GOODIX_TOUCH_EVENT 0x80
 #define GOODIX_POWERON_FOD_EVENT 0x88
 #define GOODIX_REQUEST_EVENT 0x40
 #define GOODIX_GESTURE_EVENT 0x20
@@ -1200,10 +1237,7 @@ static int goodix_touch_handler(struct goodix_ts_core *cd,
 
 static int brld_set_coor_mode(struct goodix_ts_core *cd) {
 	struct goodix_ts_cmd cmd;
-	int flag_addr = cd->ic_info.misc.touch_data_addr;
-	int retry = 20;
 	int ret;
-	u8 val;
 
 	if (cd->bus->ic_type != IC_TYPE_BERLIN_D || atomic_read(&cd->suspended) == 1)
 		return 0;
@@ -1232,39 +1266,14 @@ static int brld_set_coor_mode(struct goodix_ts_core *cd) {
 		goto exit;
 	}
 
-	// Sync touch report rate
-	brl_switch_report_rate(cd, cd->report_rate == 480);
 
-	// Clear touch event flag
-	val = 0;
-	ret = brl_write(cd, flag_addr, &val, 1);
-	if (ret < 0) {
-		ts_err("failed to clear touch event flag");
-		goto exit;
-	}
-
-	// Wait for touch event
-	while (retry--) {
-		usleep_range(5000, 5100);
-		ret = brl_read(cd, flag_addr, &val, 1);
-		if (!ret && (val & GOODIX_TOUCH_EVENT)) {
-			ts_debug("found GOODIX_TOUCH_EVENT, %d retries remaining", retry);
-			break;
-		}
-	}
-
-	if (!retry) {
+	if (!brl_wait_for_touch_data(cd)) {
 		ts_err("touch data is not ready");
 		goto exit;
 	}
 
-	// Clear touch event flag
-	val = 0;
-	ret = brl_write(cd, flag_addr, &val, 1);
-	if (ret < 0) {
-		ts_err("failed to clear touch event flag");
-		goto exit;
-	}
+	// Sync touch report rate
+	brl_switch_report_rate(cd, cd->report_rate == 480);
 
 	ts_info("successfully enabled coor mode");
 exit:
@@ -1735,6 +1744,9 @@ static int brl_switch_report_rate(struct goodix_ts_core *cd, bool on)
 		ts_info("reprot rate switch: %s",
 			(on == true) ? "480HZ" : "240HZ");
 	}
+
+	if (!brl_wait_for_touch_data(cd))
+		ts_err("touch data is not ready");
 
 	return 0;
 }
