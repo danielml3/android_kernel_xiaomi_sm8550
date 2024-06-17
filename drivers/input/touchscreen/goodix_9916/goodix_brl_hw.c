@@ -1301,7 +1301,7 @@ static int brl_event_handler(struct goodix_ts_core *cd,
 	}
 	large_touch_status = pre_buf[2];
 	event_status = pre_buf[0];
-	ts_err("event_status = %d\n", event_status);
+	ts_debug("event_status = %d\n", event_status);
 	memcpy(ts_event->touch_data.tmp_data, pre_buf, 32 * sizeof(u8));
 
 	if (event_status & GOODIX_POWERON_FOD_EVENT) {
