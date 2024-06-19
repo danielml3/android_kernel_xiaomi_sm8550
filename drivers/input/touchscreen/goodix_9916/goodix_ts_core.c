@@ -1319,7 +1319,14 @@ static void goodix_ts_report_finger(struct input_dev *dev,
 	mutex_lock(&dev->mutex);
 #ifdef GOODIX_FOD_AREA_REPORT
 	if ((goodix_core_data->eventsdata & 0x08) &&
-	    (goodix_core_data->fod_status) && (!goodix_core_data->fod_finger)) {
+	    (goodix_core_data->fod_status)) {
+
+		if (goodix_core_data->fod_finger) {
+			input_mt_report_slot_state(dev, MT_TOOL_FINGER, 0);
+			input_sync(dev);
+			goto finger_pos;;
+		}
+
 		ts_info("fod down");
 		goodix_core_data->fod_finger = true;
 		input_report_key(dev, BTN_INFO, 1);
